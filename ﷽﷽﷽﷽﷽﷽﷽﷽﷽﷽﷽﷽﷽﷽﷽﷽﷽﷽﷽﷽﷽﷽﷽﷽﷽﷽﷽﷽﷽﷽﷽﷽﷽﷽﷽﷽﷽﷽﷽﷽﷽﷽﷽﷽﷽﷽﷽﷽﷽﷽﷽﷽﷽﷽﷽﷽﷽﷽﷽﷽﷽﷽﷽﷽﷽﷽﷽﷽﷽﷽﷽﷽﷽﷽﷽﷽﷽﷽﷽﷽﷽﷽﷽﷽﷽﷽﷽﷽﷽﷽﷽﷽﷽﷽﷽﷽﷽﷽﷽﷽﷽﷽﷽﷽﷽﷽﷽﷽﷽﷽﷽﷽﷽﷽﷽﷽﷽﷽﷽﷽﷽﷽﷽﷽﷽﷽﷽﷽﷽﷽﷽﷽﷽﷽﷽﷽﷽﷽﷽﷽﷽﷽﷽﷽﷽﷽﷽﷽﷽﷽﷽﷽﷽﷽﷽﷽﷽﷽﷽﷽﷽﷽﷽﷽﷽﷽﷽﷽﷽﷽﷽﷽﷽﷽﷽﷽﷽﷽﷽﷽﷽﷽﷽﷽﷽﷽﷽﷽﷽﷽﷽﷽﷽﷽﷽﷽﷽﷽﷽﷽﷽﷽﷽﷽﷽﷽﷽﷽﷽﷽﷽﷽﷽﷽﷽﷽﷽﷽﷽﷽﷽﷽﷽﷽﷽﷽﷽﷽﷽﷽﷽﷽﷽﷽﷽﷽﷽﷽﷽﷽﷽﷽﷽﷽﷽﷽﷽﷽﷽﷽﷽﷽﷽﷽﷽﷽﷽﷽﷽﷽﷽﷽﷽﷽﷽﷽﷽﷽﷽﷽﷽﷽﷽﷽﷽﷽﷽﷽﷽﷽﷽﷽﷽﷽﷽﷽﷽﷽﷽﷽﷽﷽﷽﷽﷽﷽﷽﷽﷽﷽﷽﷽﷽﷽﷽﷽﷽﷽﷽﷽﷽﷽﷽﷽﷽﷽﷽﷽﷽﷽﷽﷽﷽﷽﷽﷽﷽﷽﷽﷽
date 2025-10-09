@@ -329,3 +329,298 @@ if ok3 then
         })
     end)
 end
+
+--// ===================================================
+--//   CHARACTER GLOW (LOCKED AT PERFECT DISTANCE = 55.45)
+--// ===================================================
+
+local Players = game:GetService('Players')
+local RunService = game:GetService('RunService')
+local CoreGui = game:GetService('CoreGui')
+
+local plr = Players.LocalPlayer
+local Highlight = CoreGui:FindFirstChild('PerfectRangeGlow')
+    or Instance.new('Highlight')
+Highlight.Name = 'PerfectRangeGlow'
+Highlight.Parent = CoreGui
+Highlight.Enabled = false
+Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+Highlight.FillTransparency = 0.25
+Highlight.OutlineTransparency = 0
+Highlight.Adornee = plr.Character
+
+--// === Fixed Parameters ===
+local PERFECT_DISTANCE = 55.45
+local PRECISION = 0.50 -- how tight the glow window is (lower = stricter)
+local GLOW_COLOR = Color3.fromRGB(0, 255, 100)
+
+--// === Collect rim centers ===
+local RimCenters = {}
+for _, v in ipairs(workspace:GetDescendants()) do
+    if v:IsA('BasePart') and v.Name == 'Lol' and v.Parent.Name == 'Rim' then
+        table.insert(RimCenters, v)
+    end
+end
+
+--// === Nearest rim distance (XZ plane only)
+local function GetNearestDistance()
+    local char = plr.Character
+    local root = char and char:FindFirstChild('HumanoidRootPart')
+    if not root then
+        return math.huge
+    end
+
+    local rootPos = Vector3.new(root.Position.X, 0, root.Position.Z)
+    local nearestDist = math.huge
+    for _, rim in ipairs(RimCenters) do
+        if rim:IsDescendantOf(workspace) then
+            local rimPos = Vector3.new(rim.Position.X, 0, rim.Position.Z)
+            local dist = (rimPos - rootPos).Magnitude
+            if dist < nearestDist then
+                nearestDist = dist
+            end
+        end
+    end
+    return nearestDist
+end
+
+--// === Glow logic ===
+RunService.RenderStepped:Connect(function()
+    local dist = GetNearestDistance()
+    local diff = math.abs(dist - PERFECT_DISTANCE)
+    local isClose = diff <= PRECISION
+
+    Highlight.Enabled = isClose
+    if isClose then
+        Highlight.FillColor = GLOW_COLOR
+        Highlight.OutlineColor = GLOW_COLOR:Lerp(Color3.new(1, 1, 1), 0.2)
+    end
+end)
+
+--// === Auto reapply on respawn ===
+plr.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    Highlight.Adornee = char
+end)
+
+print(
+    string.format(
+        '[✅ Glow Ready] Perfect distance = %.2f active.',
+        PERFECT_DISTANCE
+    )
+)
+
+--// ===================================================
+--//   AUTO AIM BASKETBALL SHOOTER (CLICK TO SHOOT)
+--// ===================================================
+
+--// === Services ===
+local Players = game:GetService('Players')
+local UserInputService = game:GetService('UserInputService')
+local RunService = game:GetService('RunService')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local CoreGui = game:GetService('CoreGui')
+local Camera = workspace.CurrentCamera
+
+--// === Player / Setup ===
+local plr = Players.LocalPlayer
+local char = plr.Character or plr.CharacterAdded:Wait()
+local remotes = ReplicatedStorage:WaitForChild('Remotes')
+local shootRemote = remotes:WaitForChild('Shoot')
+
+--// === State ===
+local toggleOn = true
+local shootKey = nil
+local selectedRim = nil
+local DotsEnabled = true
+
+--// === Notification ===
+local function notify(msg, color)
+    local gui = Instance.new('ScreenGui', CoreGui)
+    gui.ResetOnSpawn = false
+    local label = Instance.new('TextLabel', gui)
+    label.AnchorPoint = Vector2.new(0.5, 0.5)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
+    label.Font = Enum.Font.Code
+    label.TextSize = 26
+    label.Text = msg
+    label.Position = UDim2.new(0.5, 0, 0.9, 0)
+    task.spawn(function()
+        task.wait(1.5)
+        gui:Destroy()
+    end)
+end
+
+--// === ESP Dot System ===
+local RimDots = {}
+local RimSize =
+    Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
+
+local function addRimDot(rim)
+    local dot = Drawing.new('Circle')
+    dot.Radius = 4
+    dot.Filled = true
+    dot.Color = Color3.new(1, 0, 0)
+    RimDots[rim] = dot
+end
+
+local function removeRimDot(rim)
+    if RimDots[rim] then
+        RimDots[rim]:Remove()
+        RimDots[rim] = nil
+    end
+    if selectedRim == rim then
+        selectedRim = nil
+    end
+end
+
+-- Draw dots
+RunService.RenderStepped:Connect(function()
+    for rim, dot in pairs(RimDots) do
+        if rim:IsDescendantOf(workspace) and DotsEnabled then
+            local pos, onScreen = Camera:WorldToViewportPoint(rim.Position)
+            dot.Position = Vector2.new(pos.X, pos.Y)
+            dot.Visible = onScreen
+            dot.Color = (rim == selectedRim) and Color3.new(1, 1, 0)
+                or Color3.new(1, 0, 0)
+            dot.Radius = (rim == selectedRim) and 6 or 4
+        else
+            dot.Visible = false
+        end
+    end
+end)
+
+-- Hook rim spawn/despawn
+workspace.DescendantAdded:Connect(function(obj)
+    if obj:IsA('BasePart') and obj.Name == 'Rim' and obj.Size == RimSize then
+        addRimDot(obj)
+    end
+end)
+workspace.DescendantRemoving:Connect(removeRimDot)
+
+-- Add existing rims
+for _, v in ipairs(workspace:GetDescendants()) do
+    if v:IsA('BasePart') and v.Name == 'Rim' and v.Size == RimSize then
+        addRimDot(v)
+    end
+end
+
+--// === Auto Rim Selection ===
+local AUTO_LOCK_DISTANCE = 85
+local UPDATE_INTERVAL = 0.1
+
+task.spawn(function()
+    while task.wait(UPDATE_INTERVAL) do
+        if not toggleOn then
+            continue
+        end
+        local root = plr.Character
+            and plr.Character:FindFirstChild('HumanoidRootPart')
+        if not root then
+            continue
+        end
+
+        local bestRim, bestDist = nil, AUTO_LOCK_DISTANCE
+        for rim, _ in pairs(RimDots) do
+            if rim:IsDescendantOf(workspace) then
+                local dist = (rim.Position - root.Position).Magnitude
+                if dist < bestDist then
+                    local pos, onScreen =
+                        Camera:WorldToViewportPoint(rim.Position)
+                    if onScreen then
+                        bestDist = dist
+                        bestRim = rim
+                    end
+                end
+            end
+        end
+
+        if bestRim and bestRim ~= selectedRim then
+            selectedRim = bestRim
+            notify('🎯 Auto-Locked Nearest Rim', Color3.fromRGB(255, 230, 0))
+        end
+    end
+end)
+
+--// === Keybind Toggles ===
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then
+        return
+    end
+    if input.KeyCode == Enum.KeyCode.O then
+        DotsEnabled = not DotsEnabled
+    elseif input.KeyCode == Enum.KeyCode.V then
+        toggleOn = not toggleOn
+        notify(
+            toggleOn and 'System ON' or 'System OFF',
+            toggleOn and Color3.fromRGB(0, 255, 0)
+                or Color3.fromRGB(255, 50, 50)
+        )
+    end
+end)
+
+--// === Capture Shoot Key ===
+local old
+old = hookmetamethod(game, '__namecall', function(self, ...)
+    local method = getnamecallmethod()
+    if method == 'FireServer' and self == shootRemote then
+        local args = { ... }
+        if type(args[3]) == 'string' and not shootKey then
+            shootKey = args[3]
+            print('[Captured ShootKey]:', shootKey)
+            notify('Shoot key captured!', Color3.fromRGB(0, 255, 0))
+        end
+    end
+    return old(self, ...)
+end)
+
+--// === Shooting Logic ===
+local function computeArc(distance)
+    return Vector3.new(0, 43 + (distance / 15), 0)
+end
+
+local function shootAtTarget()
+    if not (selectedRim and selectedRim:IsDescendantOf(workspace)) then
+        notify('❌ No Target Found', Color3.fromRGB(255, 80, 80))
+        return
+    end
+    if not shootKey then
+        notify('⚙️ Shoot Key Missing', Color3.fromRGB(255, 180, 80))
+        return
+    end
+
+    local char = plr.Character
+    if not char then
+        return
+    end
+    local head = char:FindFirstChild('Head')
+    local root = char.PrimaryPart
+    if not (head and root) then
+        return
+    end
+
+    local dist = (root.Position - selectedRim.Position).Magnitude
+    local targetPos = selectedRim.Position + computeArc(dist)
+    local dir = (targetPos - head.Position).Unit
+    local shootFrom = root.Position + dir * 3.8
+    if shootFrom.Y - root.Position.Y < 4 then
+        shootFrom = root.Position + dir * 4
+    end
+
+    shootRemote:FireServer(targetPos, shootFrom, shootKey)
+    notify('🏀 Shot Fired!', Color3.fromRGB(0, 255, 0))
+end
+
+--// === Mouse Click to Shoot ===
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp or not toggleOn then
+        return
+    end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        shootAtTarget()
+    end
+end)
+
+print('[🏀 Auto Aim Basketball] Loaded successfully. Click to shoot enabled.')
+print('[V] Toggle system | [O] Toggle dots')
