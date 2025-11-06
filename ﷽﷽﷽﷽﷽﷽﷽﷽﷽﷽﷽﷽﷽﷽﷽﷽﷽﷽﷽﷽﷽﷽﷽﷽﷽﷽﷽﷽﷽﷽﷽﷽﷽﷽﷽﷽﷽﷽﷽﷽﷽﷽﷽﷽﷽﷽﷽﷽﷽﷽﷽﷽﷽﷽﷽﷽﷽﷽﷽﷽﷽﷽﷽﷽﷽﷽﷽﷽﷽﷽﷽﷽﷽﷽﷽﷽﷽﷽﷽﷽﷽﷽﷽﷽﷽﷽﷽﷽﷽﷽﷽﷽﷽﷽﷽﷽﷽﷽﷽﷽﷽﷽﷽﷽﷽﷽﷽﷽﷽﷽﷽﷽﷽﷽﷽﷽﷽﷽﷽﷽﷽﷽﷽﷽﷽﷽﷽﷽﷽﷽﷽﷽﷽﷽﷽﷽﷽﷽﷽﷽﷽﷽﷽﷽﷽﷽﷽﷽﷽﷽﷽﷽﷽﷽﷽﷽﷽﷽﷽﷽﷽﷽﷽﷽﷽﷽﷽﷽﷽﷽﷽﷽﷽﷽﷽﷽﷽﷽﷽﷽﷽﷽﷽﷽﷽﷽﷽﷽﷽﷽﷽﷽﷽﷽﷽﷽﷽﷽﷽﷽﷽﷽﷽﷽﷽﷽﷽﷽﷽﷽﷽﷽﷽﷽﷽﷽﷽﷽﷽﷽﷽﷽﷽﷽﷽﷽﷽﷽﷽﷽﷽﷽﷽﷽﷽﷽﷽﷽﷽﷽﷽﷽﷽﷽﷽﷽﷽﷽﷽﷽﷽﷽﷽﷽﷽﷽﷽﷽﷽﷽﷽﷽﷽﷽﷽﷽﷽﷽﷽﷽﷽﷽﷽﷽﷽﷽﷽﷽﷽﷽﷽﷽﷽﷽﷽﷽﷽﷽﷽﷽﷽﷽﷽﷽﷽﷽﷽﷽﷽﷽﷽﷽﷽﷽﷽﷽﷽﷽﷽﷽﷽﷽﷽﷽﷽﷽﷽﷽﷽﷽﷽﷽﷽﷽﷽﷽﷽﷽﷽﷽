@@ -1086,150 +1086,6 @@ plr.CharacterAdded:Connect(function(c)
 	hl.Adornee = c
 end)
 
---// ===========================================================
---//   PAYLOAD0 • RIM ARC LINES ONLY (NO DOTS)
---//   • Smooth, high-resolution curvature (extra dense lines)
---// ===========================================================
-
-local Players = game:GetService('Players')
-local RunService = game:GetService('RunService')
-local Workspace = game:GetService('Workspace')
-
-local plr = Players.LocalPlayer
-local char = plr.Character or plr.CharacterAdded:Wait()
-local hrp = char:WaitForChild('HumanoidRootPart')
-
--- === CONFIGURATION ===
-local PERFECT_DISTANCES = { 54.97, 61.53, 68.10 }
-local RING_ARC_DEGREES = 180
-local DEGREE_STEP = 2 -- smaller = smoother curve (was 6)
-local DOT_MATERIAL = Enum.Material.Neon
-local DOT_COLOR = Color3.fromRGB(0, 0, 0) -- black
-local LINK_THICKNESS = 0.25
-local ACTIVE_RANGE = 100
-local RIM_SIZE =
-    Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
-local HEIGHT_OFFSET = -18.259
-
--- Per-line dot adjustments (positive = extend, negative = subtract)
-local ARC_ADJUSTMENTS = {
-    [1] = 12,
-    [2] = -9,
-    [3] = -27,
-}
-
--- === INTERNAL STATE ===
-local RimLines = {}
-local RimModels = {}
-
--- === Create smooth arc lines ===
-local function createArcLines(rimPart, radius, extraDegrees)
-    local model = Instance.new('Model')
-    model.Name = 'Payload0_ArcLine'
-    model.Parent = Workspace
-
-    local base = Instance.new('Part')
-    base.Anchored = true
-    base.CanCollide = false
-    base.Transparency = 1
-    base.Size = Vector3.one
-    base.Position = rimPart.Position
-    base.Parent = model
-
-    local forward = rimPart.CFrame.LookVector
-    local right = rimPart.CFrame.RightVector
-    local points = {}
-
-    local startDeg = -RING_ARC_DEGREES / 2 - extraDegrees
-    local endDeg = RING_ARC_DEGREES / 2 + extraDegrees
-
-    for deg = startDeg, endDeg, DEGREE_STEP do
-        local rad = math.rad(deg)
-        local offset = (forward * math.cos(rad) + right * math.sin(rad))
-            * radius
-        table.insert(
-            points,
-            rimPart.Position + Vector3.new(offset.X, HEIGHT_OFFSET, offset.Z)
-        )
-    end
-
-    for i = 1, #points - 1 do
-        local a, b = points[i], points[i + 1]
-        local dist = (a - b).Magnitude
-        local link = Instance.new('Part')
-        link.Anchored = true
-        link.CanCollide = false
-        link.Material = DOT_MATERIAL
-        link.Color = DOT_COLOR
-        link.Transparency = 0
-        link.Size = Vector3.new(LINK_THICKNESS, LINK_THICKNESS, dist)
-        link.CFrame = CFrame.new(a, b) * CFrame.new(0, 0, -dist / 2)
-        link.Parent = model
-    end
-
-    return model
-end
-
--- === Rim registration ===
-local function registerRim(rim)
-    if RimLines[rim] then
-        return
-    end
-    RimLines[rim] = true
-
-    local rimModel = Instance.new('Model')
-    rimModel.Name = 'Payload0_RimArcs_' .. rim:GetDebugId()
-    rimModel.Parent = Workspace
-
-    for i, dist in ipairs(PERFECT_DISTANCES) do
-        local extra = ARC_ADJUSTMENTS[i] or 0
-        local model = createArcLines(rim, dist, extra)
-        model.Parent = rimModel
-    end
-
-    RimModels[rim] = rimModel
-end
-
-local function unregisterRim(rim)
-    if RimModels[rim] then
-        RimModels[rim]:Destroy()
-    end
-    RimLines[rim] = nil
-    RimModels[rim] = nil
-end
-
--- === Rim auto-detect ===
-Workspace.DescendantAdded:Connect(function(o)
-    if o:IsA('BasePart') and o.Name == 'Rim' and o.Size == RIM_SIZE then
-        registerRim(o)
-    end
-end)
-Workspace.DescendantRemoving:Connect(function(o)
-    if RimLines[o] then
-        unregisterRim(o)
-    end
-end)
-for _, v in ipairs(Workspace:GetDescendants()) do
-    if v:IsA('BasePart') and v.Name == 'Rim' and v.Size == RIM_SIZE then
-        registerRim(v)
-    end
-end
-
--- === Range visibility logic ===
-RunService.RenderStepped:Connect(function()
-    for rim, model in pairs(RimModels) do
-        if rim:IsDescendantOf(Workspace) then
-            local dist = (rim.Position - hrp.Position).Magnitude
-            local active = dist <= ACTIVE_RANGE
-            for _, part in ipairs(model:GetDescendants()) do
-                if part:IsA('Part') then
-                    part.Transparency = active and 0 or 1
-                end
-            end
-        end
-    end
-end)
-
 --// =========================================================
 --//	NO KEYBINDS:
 --//   • Instantly removes:
@@ -1791,3 +1647,99 @@ TextChatService.TextChannels.ChildAdded:Connect(function(channel)
         hookChat(channel)
     end
 end)
+
+--[[
+Payload0 Arc Visualizer (One-Time Placement Edition)
+Creates static, anchored arcs for each Rim once and never updates them.
+Zero loops, zero runtime cost, no transparency toggles.
+]]
+
+-- === SERVICES ===
+local Players = game:GetService('Players')
+local Workspace = game:GetService('Workspace')
+
+-- === CONFIGURATION ===
+local PERFECT_DISTANCES = { 54.97, 61.53, 68.10 }
+local RING_ARC_DEGREES = 180
+local DEGREE_STEP = 4
+local DOT_MATERIAL = Enum.Material.Neon
+local DOT_COLOR = Color3.fromRGB(0, 0, 0)
+local LINK_THICKNESS = 0.25
+local RIM_SIZE =
+    Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
+local HEIGHT_OFFSET = -18.259
+local ARC_ADJUSTMENTS = { [1] = 12, [2] = -9, [3] = -27 }
+
+-- === INTERNALS ===
+local ArcFolder = Instance.new('Folder', Workspace)
+ArcFolder.Name = 'Payload0_StaticArcs'
+
+-- === HELPERS ===
+local function isValidRim(o)
+    return o:IsA('BasePart') and o.Name == 'Rim' and o.Size == RIM_SIZE
+end
+
+local function createStaticArc(rimPart, radius, extraDegrees)
+    local model = Instance.new('Model')
+    model.Name = 'Payload0_StaticArc_' .. rimPart:GetDebugId()
+    model.Parent = ArcFolder
+
+    local forward = rimPart.CFrame.LookVector
+    local right = rimPart.CFrame.RightVector
+    local startDeg = -RING_ARC_DEGREES / 2 - extraDegrees
+    local endDeg = RING_ARC_DEGREES / 2 + extraDegrees
+
+    local points = {}
+    for deg = startDeg, endDeg, DEGREE_STEP do
+        local rad = math.rad(deg)
+        local offset = (forward * math.cos(rad) + right * math.sin(rad))
+            * radius
+        table.insert(
+            points,
+            rimPart.Position + Vector3.new(offset.X, HEIGHT_OFFSET, offset.Z)
+        )
+    end
+
+    for i = 1, #points - 1 do
+        local a, b = points[i], points[i + 1]
+        local dist = (a - b).Magnitude
+        local link = Instance.new('Part')
+        link.Anchored = true
+        link.CanCollide = false
+        link.Material = DOT_MATERIAL
+        link.Color = DOT_COLOR
+        link.Transparency = 0
+        link.Size = Vector3.new(LINK_THICKNESS, LINK_THICKNESS, dist)
+        link.CFrame = CFrame.new(a, b) * CFrame.new(0, 0, -dist / 2)
+        link.Parent = model
+    end
+
+    return model
+end
+
+local function registerRim(rim)
+    -- Skip if already has arcs
+    if ArcFolder:FindFirstChild('Payload0_StaticArc_' .. rim:GetDebugId()) then
+        return
+    end
+
+    for i, dist in ipairs(PERFECT_DISTANCES) do
+        local extra = ARC_ADJUSTMENTS[i] or 0
+        createStaticArc(rim, dist, extra)
+    end
+end
+
+-- === INITIAL SCAN ===
+for _, v in ipairs(Workspace:GetDescendants()) do
+    if isValidRim(v) then
+        registerRim(v)
+    end
+end
+
+-- === AUTO REGISTER ON SPAWN ===
+Workspace.DescendantAdded:Connect(function(o)
+    if isValidRim(o) then
+        registerRim(o)
+    end
+end)
+
