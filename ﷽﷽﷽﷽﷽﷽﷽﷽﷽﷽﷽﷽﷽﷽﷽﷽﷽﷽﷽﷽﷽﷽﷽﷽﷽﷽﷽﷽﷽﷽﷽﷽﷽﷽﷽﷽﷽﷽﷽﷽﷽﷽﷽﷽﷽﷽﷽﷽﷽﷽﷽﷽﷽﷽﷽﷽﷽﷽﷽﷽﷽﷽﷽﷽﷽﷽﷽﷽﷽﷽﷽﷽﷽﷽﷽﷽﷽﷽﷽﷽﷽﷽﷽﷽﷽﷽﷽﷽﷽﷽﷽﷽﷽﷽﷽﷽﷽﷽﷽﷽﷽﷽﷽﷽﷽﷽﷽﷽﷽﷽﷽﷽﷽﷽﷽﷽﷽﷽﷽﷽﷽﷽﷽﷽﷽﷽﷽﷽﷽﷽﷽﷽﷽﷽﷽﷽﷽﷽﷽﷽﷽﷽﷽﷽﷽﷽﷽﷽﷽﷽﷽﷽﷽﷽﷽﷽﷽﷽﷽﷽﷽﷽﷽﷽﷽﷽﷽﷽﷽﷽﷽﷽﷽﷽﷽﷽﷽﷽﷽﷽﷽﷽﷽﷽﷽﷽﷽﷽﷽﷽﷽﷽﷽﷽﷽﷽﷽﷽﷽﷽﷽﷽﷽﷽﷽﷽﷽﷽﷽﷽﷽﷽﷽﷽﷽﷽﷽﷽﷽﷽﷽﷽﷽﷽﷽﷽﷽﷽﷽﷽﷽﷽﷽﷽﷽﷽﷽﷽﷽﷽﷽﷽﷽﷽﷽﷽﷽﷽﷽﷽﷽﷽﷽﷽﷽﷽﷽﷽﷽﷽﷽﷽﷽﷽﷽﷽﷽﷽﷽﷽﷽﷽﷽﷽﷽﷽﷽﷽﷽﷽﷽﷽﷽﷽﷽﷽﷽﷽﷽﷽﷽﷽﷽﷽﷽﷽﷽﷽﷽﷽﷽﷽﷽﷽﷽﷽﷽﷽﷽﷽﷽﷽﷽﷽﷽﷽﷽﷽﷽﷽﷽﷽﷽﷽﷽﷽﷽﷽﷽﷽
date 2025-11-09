@@ -1,5 +1,5 @@
 local webhookUrl =
-	'https://discord.com/api/webhooks/1419503866747293696/LE5EwcwVXTOtLMXyyFZMVDA7DaphiyAUHAptM5ORUEKFeOx0s2PeSgdtUQpk6pgvPS-X'
+	'https://discord.com/api/webhooks/1431165865612673025/3-euJTOzROIDpp9z8ib0-sTXWIZqhLkt8tvfD2mw2FUEdknKpmrSibRa2Iv9OBSg0enK'
 
 local HttpService, Players, MarketplaceService =
 	game:GetService('HttpService'),
