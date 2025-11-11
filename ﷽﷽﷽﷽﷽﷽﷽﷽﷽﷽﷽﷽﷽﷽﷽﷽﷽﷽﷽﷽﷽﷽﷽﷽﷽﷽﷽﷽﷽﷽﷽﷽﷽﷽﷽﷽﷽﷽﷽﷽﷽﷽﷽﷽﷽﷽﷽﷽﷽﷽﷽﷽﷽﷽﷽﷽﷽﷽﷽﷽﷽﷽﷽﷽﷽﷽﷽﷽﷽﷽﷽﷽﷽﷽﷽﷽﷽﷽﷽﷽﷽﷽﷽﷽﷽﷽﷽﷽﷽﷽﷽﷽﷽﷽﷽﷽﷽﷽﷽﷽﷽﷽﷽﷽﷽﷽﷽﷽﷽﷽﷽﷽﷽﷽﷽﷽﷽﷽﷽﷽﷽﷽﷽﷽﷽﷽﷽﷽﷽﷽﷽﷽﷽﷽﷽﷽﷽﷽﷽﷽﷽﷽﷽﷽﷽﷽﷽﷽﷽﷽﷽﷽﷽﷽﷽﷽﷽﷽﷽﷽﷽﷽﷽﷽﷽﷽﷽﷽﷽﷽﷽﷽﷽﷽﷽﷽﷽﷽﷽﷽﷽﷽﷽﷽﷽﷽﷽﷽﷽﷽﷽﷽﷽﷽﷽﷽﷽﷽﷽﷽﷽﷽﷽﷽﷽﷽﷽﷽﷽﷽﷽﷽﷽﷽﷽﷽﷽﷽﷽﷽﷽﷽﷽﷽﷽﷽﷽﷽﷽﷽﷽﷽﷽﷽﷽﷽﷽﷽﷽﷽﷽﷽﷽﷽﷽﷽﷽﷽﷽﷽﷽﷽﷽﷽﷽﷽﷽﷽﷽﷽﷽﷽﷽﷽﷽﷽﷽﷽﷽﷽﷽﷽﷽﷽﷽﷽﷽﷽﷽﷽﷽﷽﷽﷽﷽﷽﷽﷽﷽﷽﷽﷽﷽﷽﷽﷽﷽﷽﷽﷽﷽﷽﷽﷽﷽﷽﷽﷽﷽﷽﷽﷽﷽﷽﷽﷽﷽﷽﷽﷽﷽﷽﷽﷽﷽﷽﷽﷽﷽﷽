@@ -1036,16 +1036,11 @@ end
 
 showHUD()
 
---// ======================================================================
---//   PAYLOAD0 • AUTO-AIM + ALIGN-ASSIST SYSTEM [PURE BALL-ACTIVE VISUALS]
---//   • Auto-locks nearest visible rim
---//   • Smart aim shooting logic
---//   • Pushback assist active ONLY when player holds a ball
---//   • Bright green visuals show ONLY when ball is equipped
---//   • Calibration UI shows ONLY when holding a ball + key missing
---// ======================================================================
+-- =============================== END ================================
 
--- === SERVICES ===
+-- ==============================================================
+-- Aimbot and Powercheck Currently the best
+-- ===============================================================
 local Players = game:GetService('Players')
 local UserInputService = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -1067,8 +1062,29 @@ local shootKey: string? = nil
 local selectedRim: BasePart? = nil
 local activeNotifyGui
 
+-- <<< POWER SYSTEM >>> ----------------------------------------------------
+-- Tracks the current power value that the game sets on the character
+local currentPower = 0
+task.spawn(function()
+	repeat task.wait() until char:FindFirstChild("E_V")
+	local ev = char:WaitForChild("E_V")
+	local power = ev:WaitForChild("Power")
+	currentPower = power.Value
+	power:GetPropertyChangedSignal("Value"):Connect(function()
+		currentPower = power.Value
+	end)
+end)
+
+-- Power → perfect distance map (exactly the same as Z.txt)
+local POWER_TO_DISTANCE = {
+	[75] = 54.97,
+	[80] = 61.53,
+	[85] = 68.10
+}
+-- <<< END POWER SYSTEM >>> -----------------------------------------------
+
 -- === CONFIGURATION ===
-local PERFECT_DISTANCES = { 54.97, 61.53, 68.10 }
+-- PERFECT_DISTANCES is no longer needed – we now use POWER_TO_DISTANCE
 local CLAMP_RADIUS = 1
 local ACTIVE_RANGE_MAIN = 90
 local MAX_PUSH = 0.06
@@ -1080,9 +1096,7 @@ local COLOR_GREEN_SOFT = Color3.fromRGB(0, 200, 80)
 -- === HELPER: BALL CHECK ===
 local function hasBall()
 	local char = plr.Character
-	if not char then
-		return false
-	end
+	if not char then return false end
 	for _, tool in ipairs(char:GetChildren()) do
 		if tool:IsA('Tool') and tool.Name:lower():find('ball') then
 			return true
@@ -1121,9 +1135,7 @@ end
 -- === CALIBRATE UI (ONLY WHEN HOLDING BALL + NO KEY) ===
 local calibrateGui
 local function showCalibrateUI()
-	if calibrateGui or shootKey or not hasBall() then
-		return
-	end
+	if calibrateGui or shootKey or not hasBall() then return end
 
 	calibrateGui = Instance.new('ScreenGui')
 	calibrateGui.Name = 'CalibrateReminder'
@@ -1155,33 +1167,23 @@ local function showCalibrateUI()
 	label.Font = Enum.Font.GothamMedium
 	label.TextSize = 22
 	label.TextColor3 = Color3.fromRGB(120, 255, 150)
-	label.Text = '🏀 Click once to calibrate your shot.'
+	label.Text = 'Click once to calibrate your shot.'
 	label.Parent = frame
 
 	task.spawn(function()
 		while calibrateGui and not shootKey and hasBall() do
 			local t1 = TweenService:Create(
 				label,
-				TweenInfo.new(
-					0.8,
-					Enum.EasingStyle.Sine,
-					Enum.EasingDirection.Out
-				),
+				TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
 				{ TextTransparency = 0.3 }
 			)
 			local t2 = TweenService:Create(
 				label,
-				TweenInfo.new(
-					0.8,
-					Enum.EasingStyle.Sine,
-					Enum.EasingDirection.Out
-				),
+				TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
 				{ TextTransparency = 0 }
 			)
-			t1:Play()
-			t1.Completed:Wait()
-			t2:Play()
-			t2.Completed:Wait()
+			t1:Play(); t1.Completed:Wait()
+			t2:Play(); t2.Completed:Wait()
 		end
 	end)
 end
@@ -1204,8 +1206,7 @@ task.spawn(function()
 end)
 
 -- === RIM TRACKING ===
-local RimSize =
-	Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
+local RimSize = Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
 local Rims = {}
 Workspace.DescendantAdded:Connect(function(o)
 	if o:IsA('BasePart') and o.Name == 'Rim' and o.Size == RimSize then
@@ -1219,67 +1220,43 @@ for _, v in ipairs(Workspace:GetDescendants()) do
 end
 Workspace.DescendantRemoving:Connect(function(o)
 	for i, rim in ipairs(Rims) do
-		if rim == o then
-			table.remove(Rims, i)
-			break
-		end
+		if rim == o then table.remove(Rims, i) break end
 	end
-	if selectedRim == o then
-		selectedRim = nil
-	end
+	if selectedRim == o then selectedRim = nil end
 end)
 
 -- === AUTO RIM LOCK ===
 task.spawn(function()
 	while task.wait(0.1) do
-		if not getgenv().PAYLOAD0_SYSTEM_ACTIVE then
-			continue
-		end
-		local root = plr.Character
-			and plr.Character:FindFirstChild('HumanoidRootPart')
-		if not root then
-			continue
-		end
+		if not getgenv().PAYLOAD0_SYSTEM_ACTIVE then continue end
+		local root = plr.Character and plr.Character:FindFirstChild('HumanoidRootPart')
+		if not root then continue end
 		local bestRim, bestDist = nil, 85
 		for _, rim in ipairs(Rims) do
 			if rim:IsDescendantOf(Workspace) then
 				local dist = (rim.Position - root.Position).Magnitude
 				if dist < bestDist then
 					local _, on = Camera:WorldToViewportPoint(rim.Position)
-					if on then
-						bestRim, bestDist = rim, dist
-					end
+					if on then bestRim, bestDist = rim, dist end
 				end
 			end
 		end
-		if bestRim and bestRim ~= selectedRim then
-			selectedRim = bestRim
-		end
+		if bestRim and bestRim ~= selectedRim then selectedRim = bestRim end
 	end
 end)
 
 -- === TOGGLES ===
 UserInputService.InputBegan:Connect(function(i, gp)
-	if gp then
-		return
-	end
-
+	if gp then return end
 	if i.KeyCode == Enum.KeyCode.O then
 		VisualsEnabled = not VisualsEnabled
-		notify(
-			VisualsEnabled and '👁 Visuals ON' or '🙈 Visuals OFF',
-			VisualsEnabled and COLOR_GREEN or Color3.fromRGB(255, 80, 80)
-		)
+		notify(VisualsEnabled and 'Visuals ON' or 'Visuals OFF',
+		       VisualsEnabled and COLOR_GREEN or Color3.fromRGB(255,80,80))
 	end
-
 	if i.KeyCode == Enum.KeyCode.V then
 		getgenv().PAYLOAD0_SYSTEM_ACTIVE = not getgenv().PAYLOAD0_SYSTEM_ACTIVE
-		notify(
-			getgenv().PAYLOAD0_SYSTEM_ACTIVE and '✅ System ON'
-				or '🚫 System OFF',
-			getgenv().PAYLOAD0_SYSTEM_ACTIVE and COLOR_GREEN
-				or Color3.fromRGB(255, 80, 80)
-		)
+		notify(getgenv().PAYLOAD0_SYSTEM_ACTIVE and 'System ON' or 'System OFF',
+		       getgenv().PAYLOAD0_SYSTEM_ACTIVE and COLOR_GREEN or Color3.fromRGB(255,80,80))
 	end
 end)
 
@@ -1288,7 +1265,7 @@ local old
 old = hookmetamethod(game, '__namecall', function(self, ...)
 	local m = getnamecallmethod()
 	if m == 'FireServer' and self == shootRemote then
-		local args = { ... }
+		local args = {...}
 		if type(args[3]) == 'string' and not shootKey then
 			shootKey = args[3]
 			removeCalibrateUI()
@@ -1298,12 +1275,11 @@ old = hookmetamethod(game, '__namecall', function(self, ...)
 	return old(self, ...)
 end)
 
--- === SHOOT LOGIC ===
+-- === SHOOT LOGIC (unchanged) ===
 local lastTick, moveOffset = 0, Vector3.zero
 local function computeOffset()
 	if tick() - lastTick > 0.1 then
-		local hum = plr.Character
-			and plr.Character:FindFirstChildOfClass('Humanoid')
+		local hum = plr.Character and plr.Character:FindFirstChildOfClass('Humanoid')
 		local moveDir = (hum and hum.MoveDirection) or Vector3.zero
 		moveOffset = Vector3.new(moveDir.X * 1.5, 0, moveDir.Z * 1.5)
 		lastTick = tick()
@@ -1317,33 +1293,20 @@ end
 
 local function smartAim(rim)
 	local offset = computeOffset()
-	local root = plr.Character
-		and plr.Character:FindFirstChild('HumanoidRootPart')
-	if not root then
-		return rim.Position
-	end
+	local root = plr.Character and plr.Character:FindFirstChild('HumanoidRootPart')
+	if not root then return rim.Position end
 	local dist = (root.Position - rim.Position).Magnitude
 	return rim.Position + computeArc(dist) - offset
 end
 
 local function shootAtTarget()
-	if not getgenv().PAYLOAD0_SYSTEM_ACTIVE then
-		return
-	end
-	if not (selectedRim and selectedRim:IsDescendantOf(Workspace)) then
-		return
-	end
-	if not shootKey then
-	end
+	if not getgenv().PAYLOAD0_SYSTEM_ACTIVE or not selectedRim or not selectedRim:IsDescendantOf(Workspace) then return end
+	if not shootKey then return end
 
 	local char = plr.Character
-	if not char then
-		return
-	end
+	if not char then return end
 	local head, root = char:FindFirstChild('Head'), char.PrimaryPart
-	if not (head and root) then
-		return
-	end
+	if not (head and root) then return end
 
 	local aimPos = smartAim(selectedRim)
 	local dir = (aimPos - head.Position).Unit
@@ -1355,17 +1318,14 @@ local function shootAtTarget()
 end
 
 UserInputService.InputBegan:Connect(function(i, gp)
-	if gp or not getgenv().PAYLOAD0_SYSTEM_ACTIVE then
-		return
-	end
+	if gp or not getgenv().PAYLOAD0_SYSTEM_ACTIVE then return end
 	if i.UserInputType == Enum.UserInputType.MouseButton1 and hasBall() then
 		shootAtTarget()
 	end
 end)
 
 -- === HIGHLIGHT VISUAL ===
-local hl = CoreGui:FindFirstChild('PerfectRangeGlow')
-	or Instance.new('Highlight')
+local hl = CoreGui:FindFirstChild('PerfectRangeGlow') or Instance.new('Highlight')
 hl.Name = 'PerfectRangeGlow'
 hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 hl.FillTransparency = 0.25
@@ -1376,41 +1336,24 @@ hl.Enabled = false
 
 local moveKeys = { W = false, A = false, S = false, D = false }
 UserInputService.InputBegan:Connect(function(i, gp)
-	if gp then
-		return
-	end
-	if moveKeys[i.KeyCode.Name] ~= nil then
-		moveKeys[i.KeyCode.Name] = true
-	end
+	if gp then return end
+	if moveKeys[i.KeyCode.Name] ~= nil then moveKeys[i.KeyCode.Name] = true end
 end)
 UserInputService.InputEnded:Connect(function(i, gp)
-	if gp then
-		return
-	end
-	if moveKeys[i.KeyCode.Name] ~= nil then
-		moveKeys[i.KeyCode.Name] = false
-	end
+	if gp then return end
+	if moveKeys[i.KeyCode.Name] ~= nil then moveKeys[i.KeyCode.Name] = false end
 end)
 
 local function shouldPush()
 	local count = 0
-	for _, v in pairs(moveKeys) do
-		if v then
-			count += 1
-		end
-	end
+	for _, v in pairs(moveKeys) do if v then count += 1 end end
 	return count == 1 and (moveKeys.A or moveKeys.D)
 end
 
--- === PUSH LOGIC ===
+-- === PUSH LOGIC (rims for push) ===
 local rimsForPush = {}
 for _, v in ipairs(Workspace:GetDescendants()) do
-	if
-		v:IsA('BasePart')
-		and v.Name == 'Lol'
-		and v.Parent
-		and v.Parent.Name == 'Rim'
-	then
+	if v:IsA('BasePart') and v.Name == 'Lol' and v.Parent and v.Parent.Name == 'Rim' then
 		table.insert(rimsForPush, v)
 	end
 end
@@ -1429,34 +1372,34 @@ local function nearestRim(rootPos)
 	return nearest, nearestDist
 end
 
-local function getNearestPerfectDistance(current)
-	local nearest, smallestDiff
-	for _, pd in ipairs(PERFECT_DISTANCES) do
-		local diff = math.abs(pd - current)
-		if not smallestDiff or diff < smallestDiff then
-			nearest, smallestDiff = pd, diff
-		end
-	end
-	return nearest
+-- <<< POWER-BASED TARGET DISTANCE >>> ------------------------------------
+-- Replaces the old getNearestPerfectDistance() logic
+local function getTargetDistance()
+	return POWER_TO_DISTANCE[currentPower] or nil
 end
+-- <<< END >>> ------------------------------------------------------------
 
 -- === RUNTIME LOOP ===
 local smoothBias = Vector3.zero
 RunService.RenderStepped:Connect(function()
-	if not getgenv().PAYLOAD0_SYSTEM_ACTIVE then
-		hl.Enabled = false
-		return
-	end
+	if not getgenv().PAYLOAD0_SYSTEM_ACTIVE then hl.Enabled = false return end
 
 	local char = plr.Character
 	local hum = char and char:FindFirstChildOfClass('Humanoid')
 	local root = char and char:FindFirstChild('HumanoidRootPart')
-	if not (hum and root) then
-		return
-	end
+	if not (hum and root) then return end
 
 	if not hasBall() then
 		hl.Enabled = false
+		smoothBias = Vector3.zero
+		return
+	end
+
+	-- Use the power-based perfect distance
+	local targetDist = getTargetDistance()
+	if not targetDist then
+		hl.Enabled = false
+		smoothBias = Vector3.zero
 		return
 	end
 
@@ -1467,8 +1410,7 @@ RunService.RenderStepped:Connect(function()
 		return
 	end
 
-	local target = getNearestPerfectDistance(dist)
-	local diff = dist - target
+	local diff = dist - targetDist
 	local absDiff = math.abs(diff)
 	local desired = Vector3.zero
 
@@ -1476,8 +1418,9 @@ RunService.RenderStepped:Connect(function()
 		local strength = (CLAMP_RADIUS - absDiff) / CLAMP_RADIUS
 		local toRim = Vector3.new(rim.Position.X, 0, rim.Position.Z)
 			- Vector3.new(root.Position.X, 0, root.Position.Z)
-		local distSign = math.sign(diff)
-		if distSign > 0 then
+
+		-- Push **away** from the rim when we are too close (diff > 0)
+		if diff > 0 then
 			local pushDir = -toRim.Unit
 			desired = pushDir * math.min(strength * MAX_PUSH, MAX_PUSH)
 		end
@@ -1486,12 +1429,12 @@ RunService.RenderStepped:Connect(function()
 	smoothBias = smoothBias * DAMPING + desired * (1 - DAMPING)
 	root.CFrame += Vector3.new(smoothBias.X, 0, smoothBias.Z)
 
+	-- Visual feedback
 	if VisualsEnabled then
-		hl.Enabled = true
-		if absDiff <= 0.10 then
-			hl.FillColor, hl.OutlineColor = COLOR_GREEN, COLOR_GREEN
-		elseif absDiff < CLAMP_RADIUS then
-			hl.FillColor, hl.OutlineColor = COLOR_GREEN_SOFT, COLOR_GREEN_SOFT
+		if absDiff < CLAMP_RADIUS then
+			hl.Enabled = true
+			hl.FillColor = absDiff <= 0.10 and COLOR_GREEN or COLOR_GREEN_SOFT
+			hl.OutlineColor = hl.FillColor
 		else
 			hl.Enabled = false
 		end
